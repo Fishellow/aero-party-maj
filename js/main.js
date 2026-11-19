@@ -71,6 +71,8 @@ Net.on('start', m => onStart(m));
 Net.on('tile', (m, id) => { const i = m.i | 0; if (!G.level || !G.game || G.phase !== 'play' || !G.level.tiles[i]) return; if (Net.isHost) Net.send({ t: 'tile', i }, id); G.level.killTile(i); });
 Net.on('orb', (m, id) => { if (Net.isHost) claimOrb(m.i | 0, id); });
 Net.on('orbx', m => gotOrb(m.i, m.id));
+Net.on('pt', (m, id) => { if (Net.isHost) paintClaim(m.i | 0, id); });
+Net.on('ptx', m => gotPaint(m.i | 0, String(m.id)));
 Net.on('pts', m => { const g = G.game; if (!g || g.def.type !== 'points' || !m.d) return; for (const id in m.d) g.pts[String(id).slice(0, 8)] = Math.round(+m.d[id]) || 0; showPts(); });
 const hostT = () => G.game ? (Net.now() - G.game.t0) / 1000 : -1;
 // arrivée annoncée par un invité : l'hôte attend (2 s au plus) que la position reçue le confirme
@@ -114,14 +116,15 @@ function hostStart(force, chain) {
   if ((G.phase !== 'lobby' && !chain) || (Net.online && !Net.isHost)) return;
   if (!chain) G.chain = null;
   const ids = Object.keys(GAMES).filter(g => !G.lastGames.includes(g)), id = force || ids[Math.floor(Math.random() * ids.length)]; G.lastGames.push(id); if (G.lastGames.length >= Object.keys(GAMES).length) G.lastGames = [id];
-  const m = { t: 'start', g: id, seed: Math.floor(Math.random() * 1e9), t0: Net.now() + 6500, order: everyone().map(p => p.id), lv: ++G.round, tour: G.chain ? [G.chain.n - G.chain.left + 1, G.chain.n] : null };
+  const m = { t: 'start', g: id, seed: Math.floor(Math.random() * 1e9), t0: Net.now() + (chain ? 5200 : 6500), order: everyone().map(p => p.id), lv: ++G.round, tour: G.chain ? [G.chain.n - G.chain.left + 1, G.chain.n] : null };
   if (G.chain) G.chain.left--;
   Net.send(m); onStart(m);
 }
 function onStart(m) {
   const def = GAMES[m.g]; if (!def) return; G.busy = false;
-  G.game = { id: m.g, def, t0: m.t0, order: m.order, res: {}, pts: {}, pend: {}, done: false, over: false, check: -1, cd: 4, endAt: 0 }; G.lv = m.lv; G.round = m.lv;
+  G.game = { id: m.g, def, t0: m.t0, order: m.order, res: {}, pts: {}, pend: {}, own: {}, ask: {}, done: false, over: false, check: -1, cd: 4, endAt: 0 }; G.lv = m.lv; G.round = m.lv;
   setLevel(buildGame(m.g, m.seed, m.order.length, { tile: i => { if (G.phase !== 'play') return; G.level.killTile(i); FX.spark(G.level.tiles[i].c, '#bff3ff', 6, 0.5); sfx('tile'); Net.send({ t: 'tile', i }); }, say: (txt, col, sec) => { const b = $('banner'); b.style.color = col; b.style.webkitTextStroke = '10px #fff'; b.style.paintOrder = 'stroke fill'; banner(txt, sec * 1000); sfx('tick'); } }));
+  G.level.onPaint = i => { const g = G.game, now = performance.now(); if (G.phase !== 'play' || g.own[i] === me.id || now - (g.ask[i] || 0) < 350) return; g.ask[i] = now; if (Net.isHost || !Net.online) paintClaim(i, me.id); else Net.send({ t: 'pt', i }); };
   G.level.onOrb = i => { if (G.phase !== 'play') { G.level.orbs[i].asked = false; return; } if (Net.isHost || !Net.online) claimOrb(i, me.id); else Net.send({ t: 'orb', i }); }; G.lastGY = 0;
   placeMe(Math.max(0, m.order.indexOf(me.id))); G.ctl.frozen = true; G.phase = 'intro'; G.myFlags = 0;
   screen('game'); ui('main'); hideOverlays(); $('cardnum').textContent = m.tour ? 'Tournoi · manche ' + (+m.tour[0] | 0) + ' sur ' + (+m.tour[1] | 0) : 'Manche ' + (m.lv | 0); $('cardname').textContent = def.nom; $('cardaide').textContent = def.aide; $('card').classList.add('on'); setTimeout(() => $('card').classList.remove('on'), 3300);
@@ -137,6 +140,9 @@ function gotPushed(x, z) { const c = G.ctl; if (c.frozen || (G.myFlags & F.OUT))
 function doPush() { const c = G.ctl; if (!playing() || c.frozen || c.stun > 0 || (G.pushCd || 0) > 0) return; G.pushCd = 0.7; G.pushT = 0.28; sfx('push'); const fx = Math.sin(c.yaw), fz = Math.cos(c.yaw); FX.puff({ x: c.pos.x + fx * 0.8, y: c.pos.y + 0.5, z: c.pos.z + fz * 0.8 }, 5, 0.8);
   let best = null, bd = 1.9; for (const p of G.P.values()) { if (p.lv !== G.lv || !p.tgt || (p.flags & F.OUT)) continue; const b = p.buddy.g.position, dx = b.x - c.pos.x, dz = b.z - c.pos.z, d = Math.hypot(dx, dz); if (d < bd && Math.abs(b.y - c.pos.y) < 1.4 && (dx * fx + dz * fz) / (d || 1) > 0.2) { bd = d; best = p; } }
   if (!best) return; if (Net.isHost) relayPush(me.id, best.id); else Net.send({ t: 'push', to: best.id }); }
+// guerre de peinture : l'hôte attribue chaque dalle, le score est le nombre de dalles à sa couleur
+function paintClaim(i, id) { const g = G.game, L = G.level; if (!g || g.over || !L.paint || i < 0 || i >= L.paintN || g.own[i] === id || G.phase !== 'play') return; if (id !== me.id) { const s = G.states[id], c = L.cellAt(i); if (!s || Math.hypot(s[0] - c.x, s[2] - c.z) > 3.4) return; } Net.send({ t: 'ptx', i, id }); gotPaint(i, id); }
+function gotPaint(i, id) { const g = G.game, L = G.level; if (!g || !L.paint || i < 0 || i >= L.paintN) return; g.own[i] = id; const p = id === me.id ? me : G.P.get(id); L.paint(i, p ? skinOf(p.skin).top : '#ffffff'); g.pts = {}; for (const k in g.own) g.pts[g.own[k]] = (g.pts[g.own[k]] || 0) + 1; showPts(); }
 function showPts() { const g = G.game; if (g && g.def.type === 'points') $('gname').textContent = g.def.nom + ' · ' + (g.pts[me.id] || 0); }
 function hillTick(t) { const g = G.game, L = G.level; if (!L.zoneAt || (Net.online && !Net.isHost) || t < (g.hillAt || 0)) return; g.hillAt = t + 0.5; const z = L.zoneAt(t); for (const id of g.order) { const s = posOf(id); if (!s || (id !== me.id && (!G.P.has(id) || G.states[id][7] !== G.lv))) continue; if (Math.hypot(s[0] - z[0], s[2] - z[1]) < z[2] && s[1] > -0.5 && s[1] < 2.5) g.pts[id] = (g.pts[id] || 0) + 1; } Net.send({ t: 'pts', d: g.pts }); showPts(); }
 function setRes(id, k, time) { const g = G.game; if (!g || g.over || g.res[id]) return; g.res[id] = { [k]: time }; Net.send({ t: 'res', id, k, time }); drawList(); const p = G.P.get(id); if (p && id !== me.id) toast(k === 'out' ? `${p.name} est éliminé` : `${p.name} est arrivé`); }
@@ -202,7 +208,7 @@ $('code').oninput = e => { e.target.value = e.target.value.toUpperCase().replace
 function applyOpt() { Audio.vol = G.opt.vol; Audio.music = G.opt.mus; setVol(); W.quality = G.opt.q; if (W.renderer) { W.renderer.shadowMap.enabled = G.opt.q > 0.7; W.bloom.enabled = G.opt.q > 0.7; if (W.ao) W.ao.enabled = G.opt.q >= 1; const ms = G.opt.q >= 1 ? 2048 : 1024; if (W.sun.shadow.mapSize.x !== ms) { W.sun.shadow.mapSize.set(ms, ms); if (W.sun.shadow.map) { W.sun.shadow.map.dispose(); W.sun.shadow.map = null; } } W.scene.traverse(o => { if (o.userData.grassFull) o.count = Math.round(o.userData.grassFull * grassShare()); }); resize(); } $('oSens').value = G.opt.sens; $('oVol').value = G.opt.vol; $('oMus').value = G.opt.mus; for (const b of $('oQual').children) b.classList.toggle('on', G.opt.auto ? b.dataset.q === '0' : +b.dataset.q === G.opt.q); }
 $('oSens').oninput = e => { G.opt.sens = +e.target.value; }; $('oVol').oninput = e => { G.opt.vol = +e.target.value; applyOpt(); }; $('oMus').oninput = e => { G.opt.mus = +e.target.value; applyOpt(); };
 for (const b of $('oQual').children) b.onclick = () => { if (b.dataset.q === '0') { G.opt.auto = true; G.opt.q = 1; } else { G.opt.auto = false; G.opt.q = +b.dataset.q; } G.fpsN = 0; G.fpsT = -3; applyOpt(); ST.set('opt', G.opt); };
-G.dbg = { tournoi: n => { for (const p of everyone()) p.score = 0; G.chain = { n: n || 5, left: n || 5 }; hostStart(null, true); }, push: doPush, start: g => hostStart(g), lobby: () => { Net.send({ t: 'lobby' }); enterLobby(); }, solo: () => { Net.close(); Net.isHost = true; me.id = 'h'; enterLobby(); }, Net, ui, pause };
+G.dbg = { games: () => Object.keys(GAMES), tournoi: n => { for (const p of everyone()) p.score = 0; G.chain = { n: n || 5, left: n || 5 }; hostStart(null, true); }, push: doPush, start: g => hostStart(g), lobby: () => { Net.send({ t: 'lobby' }); enterLobby(); }, solo: () => { Net.close(); Net.isHost = true; me.id = 'h'; enterLobby(); }, Net, ui, pause };
 
 const fit = () => document.documentElement.style.setProperty('--z', Math.max(0.75, Math.min(2.2, innerHeight / 900)).toFixed(3)); fit(); addEventListener('resize', fit);
 // ------------------------------------------------------------------ boucle de jeu
@@ -218,6 +224,7 @@ function playLogic(t, dt) {
     if (g.def.type === 'course') {
       L.checks.forEach((k, i) => { if (i > g.check && c.grounded && p.z >= k[3] && p.y > k[1] - 1) { g.check = i; sfx('check'); toast('Point de passage'); FX.ring(p, '#ffe45a', 9); FX.spark(p, '#ffe45a', 18); } });
       if (c.grounded) G.lastGY = p.y;
+      if (L.sendBack) { L.sendBack = false; const k = L.spawns[G.spawnI]; c.place(k[0], k[1] + 0.3, k[2], 0); G.fade = 0.5; sfx('out'); toast('Tu as bougé au feu rouge'); }
       if (p.y < L.killY || (L.fall && p.y < G.lastGY - L.fall)) { G.lastGY = -99; const k = g.check >= 0 ? L.checks[g.check] : L.spawns[G.spawnI]; c.place(k[0] + (Math.random() - 0.5) * 3, k[1] + 0.5, k[2], 0); G.fade = 0.6; }
       if (p.z > L.finishZ && p.y > L.finishY && c.grounded) { g.done = true; report('fin', t); const pos = Object.keys(g.res).length; banner(pos <= 1 ? 'Premier !' : `Arrivé ${pos}e`, 4000); G.myFlags = F.WIN; sfx('win'); FX.confetti(p, 140); }
     } else if (g.def.type === 'points') { if (p.y < L.killY) { placeMe(G.spawnI); G.fade = 0.6; } hillTick(t); }

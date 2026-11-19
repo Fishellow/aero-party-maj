@@ -3,20 +3,21 @@ import * as THREE from 'three';
 import { W, spawn, clearSpins } from './world.js';
 import { PR, PH } from './player.js';
 import { makeGrass, bannerTexture, boardTexture, FX } from './fx.js';
+import { more } from './games2.js';
 
 export const rng = seed => () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
 const RAINBOW = ['#ff3b5c', '#ff8a1f', '#ffd21f', '#3fe26a', '#19c7ff', '#3d6bff', '#a04dff', '#ff5ac8'];
 const TAU = Math.PI * 2, ORB_GEO = new THREE.SphereGeometry(0.42, 22, 16), ORB_MAT = new THREE.MeshBasicMaterial({ color: new THREE.Color(1.9, 1.35, 0.18), toneMapped: false });
 
 export class Level {
-  constructor() { this.root = new THREE.Group(); W.scene.add(this.root); this.cols = []; this.movers = []; this.bars = []; this.bumpers = []; this.spawns = []; this.checks = []; this.anims = []; this.killY = -20; this.tiles = []; this.hit = 0; this.zones = []; this.orbs = []; this.ticks = []; clearSpins(); }
+  constructor() { this.root = new THREE.Group(); W.scene.add(this.root); this.cols = []; this.movers = []; this.bars = []; this.bumpers = []; this.spawns = []; this.checks = []; this.anims = []; this.killY = -20; this.tiles = []; this.hit = 0; this.zones = []; this.orbs = []; this.ticks = []; this.shrinks = []; clearSpins(); }
   dispose() { W.scene.remove(this.root); clearSpins(); }
   col(c) { c.on = true; c.dx = c.dy = c.dz = 0; this.cols.push(c); return c; }
   /** plateforme ronde : dessus à la hauteur y */
   cyl(x, y, z, r, o = {}) {
     const ys = o.thick || Math.min(2.2, Math.max(1, r * 0.4)), c = this.col({ k: 'c', x, y, z, r, h: 0.42 * ys });
     if (o.vis !== false) c.vis = spawn('plateforme', { parent: this.root, pos: [x, y, z], scale: [r, ys, r], tint: o.tint, only: ['bande'] });
-    if (o.move) this.movers.push({ c, f: o.move }); return c;
+    if (o.move) this.movers.push({ c, f: o.move }); if (o.rf) this.shrinks.push({ c, f: o.rf, ys }); return c;
   }
   /** dalle rectangulaire sx × sz */
   box(x, y, z, sx, sz, o = {}) {
@@ -32,7 +33,7 @@ export class Level {
   }
   bumper(x, y, z, s = 1, tint, move) { const vis = spawn('bumper', { parent: this.root, pos: [x, y, z], scale: s, tint, only: ['orbe'] }); if (!move) this.col({ k: 'c', x, y: y + 0.3 * s, z, r: 0.9 * s, h: 0.3 * s }); this.bumpers.push({ x, y: y + 0.82 * s, z, r: 0.85 * s, vis, k: 0, s, move }); }
   /** bulle dorée à ramasser, visible à partir du temps `at` */
-  orb(x, y, z, at) { const g = new THREE.Group(), core = new THREE.Mesh(ORB_GEO, ORB_MAT), halo = new THREE.Mesh(ORB_GEO, W.mats.verre_clair); halo.scale.setScalar(1.55); halo.userData.noAO = true; core.castShadow = true; g.add(core, halo); g.position.set(x, y, z); g.visible = false; this.root.add(g); this.orbs.push({ x, y, z, at, g, taken: false, asked: false }); }
+  orb(x, y, z, at, fall) { const g = new THREE.Group(), core = new THREE.Mesh(ORB_GEO, ORB_MAT), halo = new THREE.Mesh(ORB_GEO, W.mats.verre_clair); halo.scale.setScalar(1.55); halo.userData.noAO = true; core.castShadow = true; g.add(core, halo); g.position.set(x, y, z); g.visible = false; this.root.add(g); this.orbs.push({ x, y, z, at, g, fall: fall || 0, taken: false, asked: false }); }
   takeOrb(i) { const o = this.orbs[i]; if (!o || o.taken) return false; o.taken = true; o.g.visible = false; FX.spark(o, '#ffe45a', 16, 0.9); FX.ring(o, '#ffe45a', 5); return true; }
   tramp(x, y, z, s = 1.6, tint, power = 19) { const vis = spawn('trampoline', { parent: this.root, pos: [x, y, z], scale: s, tint, only: ['bande'] }); const c = this.col({ k: 'c', x, y: y + 0.05, z, r: s * 0.95, h: 0.5 * s, bounce: power, hitT: 9 }); this.anims.push((t, dt) => { c.hitT += dt; const k = Math.max(0, 1 - c.hitT * 2.5); vis.scale.set(s * (1 + k * 0.12), s * (1 - k * 0.5 * Math.cos(c.hitT * 30)), s * (1 + k * 0.12)); }); }
   deco(name, x, y, z, o = {}) { return spawn(name, Object.assign({ parent: this.root, pos: [x, y, z] }, o)); }
@@ -54,15 +55,16 @@ export class Level {
     for (const m of this.movers) { const c = m.c, p = m.f(t), ox = c.x, oy = c.y, oz = c.z, oyaw = c.yaw || 0; c.x = p[0]; c.y = p[1]; c.z = p[2]; if (p[3] != null) c.yaw = p[3]; c.dx = c.x - ox; c.dy = c.y - oy; c.dz = c.z - oz; c.dyaw = p[3] != null ? c.yaw - oyaw : 0; if (c.vis) { c.vis.position.set(c.x, c.y, c.z); if (p[3] != null) c.vis.rotation.y = c.yaw; } }
     for (const b of this.bars) { const a = b.ang(t); b.w = dt > 0 ? (a - b.a) / dt : 0; b.a = a; b.node.rotation.y = a; }
     for (const T of this.tiles) if (T.dying && T.c.on) { T.t += dt; const k = T.t / 0.6; T.vis.position.y = T.c.y - k * k * 0.5; T.vis.scale.setScalar(Math.max(0.01, 1 - k * k * 0.9)); T.vis.rotation.y = Math.sin(T.t * 40) * 0.06; if (k >= 1) { T.c.on = false; T.vis.visible = false; } }
+    for (const s of this.shrinks) { s.c.r = s.f(t); s.c.vis.scale.set(s.c.r, s.ys, s.c.r); }
     for (const f of this.anims) f(t, dt);
     for (const f of this.ticks) f(t, dt, ctl);
     for (const B of this.bumpers) if (B.move) { const p = B.move(t); B.x = p[0]; B.z = p[1]; B.vis.position.x = p[0]; B.vis.position.z = p[1]; }
-    for (let i = 0; i < this.orbs.length; i++) { const o = this.orbs[i]; if (o.taken) continue; const on = t >= o.at; o.g.visible = on; if (!on) continue; const k = Math.min(1, (t - o.at) * 3); o.g.position.y = o.y + Math.sin(t * 3 + i) * 0.18; o.g.rotation.y = t * 2 + i; o.g.scale.setScalar(k * (1 + Math.sin(t * 6 + i) * 0.06));
-      if (ctl && !o.asked && Math.hypot(ctl.pos.x - o.x, ctl.pos.y + 0.6 - o.y, ctl.pos.z - o.z) < 1.25) { o.asked = true; this.onOrb && this.onOrb(i); } }
+    for (let i = 0; i < this.orbs.length; i++) { const o = this.orbs[i]; if (o.taken) continue; const on = t >= o.at; o.g.visible = on; if (!on) continue; const k = Math.min(1, (t - o.at) * 3), oy = o.fall ? Math.max(o.y, o.y + o.fall - (t - o.at) * 5) : o.y; o.g.position.y = oy + Math.sin(t * 3 + i) * 0.18; o.g.rotation.y = t * 2 + i; o.g.scale.setScalar(k * (1 + Math.sin(t * 6 + i) * 0.06));
+      if (ctl && !o.asked && Math.hypot(ctl.pos.x - o.x, ctl.pos.y + 0.6 - oy, ctl.pos.z - o.z) < 1.25) { o.asked = true; this.onOrb && this.onOrb(i); } }
     for (const B of this.bumpers) { B.k = Math.max(0, B.k - dt * 3); const k = B.k; B.vis.scale.set(B.s * (1 + k * 0.25), B.s * (1 - k * 0.2), B.s * (1 + k * 0.25)); }
     if (!ctl) return;
     this.hit = Math.max(0, this.hit - dt); const p = ctl.pos;
-    if (this.hit <= 0) for (const b of this.bars) {
+    if (this.hit <= 0 && (t > 1.3 || this.name === 'lobby')) for (const b of this.bars) {
       if (p.y > b.y + b.rad || p.y + PH < b.y - b.rad) continue;
       const ux = Math.cos(b.a), uz = -Math.sin(b.a), rx = p.x - b.x, rz = p.z - b.z, along = Math.max(-b.half, Math.min(b.half, rx * ux + rz * uz)), qx = rx - ux * along, qz = rz - uz * along, d = Math.hypot(qx, qz);
       if (d > b.rad + PR) continue;
@@ -282,4 +284,5 @@ export const GAMES = {
   avalanche: { nom: 'Avalanche de Billes', aide: 'Des billes géantes traversent le plateau. Esquive-les le plus longtemps possible.', type: 'survie', duree: 120, build: avalanche },
   couleurs: { nom: 'Couleur Magique', aide: 'Cours sur la couleur annoncée : toutes les autres dalles tombent.', type: 'survie', duree: 150, build: couleurs },
 };
+Object.assign(GAMES, more({ THREE, W, rng, RAINBOW, TAU, backdrop, glassOf, FX, spawn }));
 export function buildGame(id, seed, n, hooks) { const L = new Level(); L.name = id; GAMES[id].build(L, seed, n, hooks); return L; }

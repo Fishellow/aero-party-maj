@@ -69,6 +69,8 @@ export const FX = {
   ring(p, color = '#ffffff', size = 5) { emit(p.x, p.y + 0.1, p.z, { life: 0.5, s0: 0.6, s1: size, a: 2.9, color }); },
   /** traînée pendant le plongeon */
   trail(p, color) { emit(p.x + rnd(-0.2, 0.2), p.y + rnd(0.3, 0.8), p.z + rnd(-0.2, 0.2), { life: 0.45, s0: 0.5, s1: 0.05, a: 0.55, color }); },
+  /** trait de vent */
+  streak(x, y, z, vx, vz) { emit(x, y, z, { life: 0.5, vx, vy: 0, vz, s0: 0.1, s1: 0.03, a: 0.55, color: '#ffffff' }); },
   /** goutte de fontaine */
   drop(x, y, z, a) { emit(x, y, z, { life: 0.9, vx: Math.cos(a) * 1.6, vy: 2.6, vz: Math.sin(a) * 1.6, g: 9, s0: 0.12, s1: 0.05, a: 0.8, color: '#dff8ff' }); },
   /** graine lumineuse qui monte doucement */

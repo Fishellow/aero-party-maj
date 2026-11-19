@@ -109,26 +109,27 @@ export class Buddy {
 
 // ------------------------------------------------------------------ physique du joueur local
 export const PR = 0.4, PH = 1.05;
-const SPEED = 7.4, GRAV = 27, JUMP = 10.2;
+const SPEED = 7.4, GRAV = 27, JUMP = 10.2, NOMOD = {};
 export class Ctl {
   constructor() { this.pos = new THREE.Vector3(); this.vel = new THREE.Vector3(); this.yaw = 0; this.grounded = false; this.coyote = 0; this.dive = false; this.diveT = 0; this.stun = 0; this.ground = null; this.jumpBuf = 0; this.frozen = false; this.events = []; }
   place(x, y, z, yaw = 0) { this.pos.set(x, y, z); this.vel.set(0, 0, 0); this.yaw = yaw; this.dive = false; this.stun = 0; this.grounded = false; this.ground = null; }
   knock(vx, vy, vz, stun = 0.7) { this.vel.set(vx, vy, vz); this.stun = stun; this.dive = false; this.grounded = false; this.coyote = 0; this.events.push('hit'); }
   get flags() { return (this.grounded ? F.GROUND : 0) | (this.dive ? F.DIVE : 0) | (this.stun > 0 ? F.STUN : 0); }
   step(dt, inp, level) {
-    const p = this.pos, v = this.vel; this.stun = Math.max(0, this.stun - dt);
+    const p = this.pos, v = this.vel, M = (level && level.mod) || NOMOD, slip = !!M.slip; this.stun = Math.max(0, this.stun - dt);
     const ctl = !this.frozen && this.stun <= 0 && !this.dive, mv = Math.hypot(inp.x, inp.z);
     if (ctl && mv > 0.01) {
-      const tx = inp.x / Math.max(mv, 1) * SPEED, tz = inp.z / Math.max(mv, 1) * SPEED, k = this.grounded ? 13 : 4.5, f = 1 - Math.exp(-k * dt);
+      const tx = inp.x / Math.max(mv, 1) * SPEED, tz = inp.z / Math.max(mv, 1) * SPEED, k = this.grounded ? (slip ? 1.5 : 13) : (M.grav ? 2.4 : 4.5), f = 1 - Math.exp(-k * dt);
       v.x += (tx - v.x) * f; v.z += (tz - v.z) * f;
       let d = Math.atan2(inp.x, inp.z) - this.yaw; d = Math.atan2(Math.sin(d), Math.cos(d)); this.yaw += d * (1 - Math.exp(-14 * dt));
-    } else if (this.grounded) { const f = Math.exp(-(this.dive ? 3.5 : this.stun > 0 ? 4 : 12) * dt); v.x *= f; v.z *= f; }
+    } else if (this.grounded) { const f = Math.exp(-(slip ? 0.7 : this.dive ? 3.5 : this.stun > 0 ? 4 : 12) * dt); v.x *= f; v.z *= f; }
     else if (this.stun <= 0 && !this.dive) { const f = Math.exp(-1.2 * dt); v.x *= f; v.z *= f; }
     this.coyote = this.grounded ? 0.12 : Math.max(0, this.coyote - dt); this.jumpBuf = inp.jump ? 0.14 : Math.max(0, this.jumpBuf - dt); this.diveBuf = inp.dive ? 0.25 : Math.max(0, (this.diveBuf || 0) - dt); this.diveCd = Math.max(0, (this.diveCd || 0) - dt);
-    if (ctl && this.jumpBuf > 0 && this.coyote > 0) { v.y = JUMP; this.coyote = 0; this.jumpBuf = 0; this.grounded = false; this.events.push('jump'); }
+    if (ctl && this.jumpBuf > 0 && this.coyote > 0) { v.y = JUMP * (M.jump || 1); this.coyote = 0; this.jumpBuf = 0; this.grounded = false; this.events.push('jump'); }
     if (ctl && this.diveBuf > 0 && this.diveCd <= 0 && !this.frozen) { this.dive = true; this.diveT = 0; this.diveBuf = 0; this.diveCd = 0.55; const s = Math.max(Math.hypot(v.x, v.z), SPEED * 0.9) + 4.2; v.x = Math.sin(this.yaw) * s; v.z = Math.cos(this.yaw) * s; v.y = Math.max(v.y, 0) * 0.4 + 5.2; this.grounded = false; this.events.push('dive'); }
     if (this.dive) { this.diveT += dt; if (this.grounded && this.diveT > 0.3) this.dive = false; if (this.diveT > 1.3) this.dive = false; }
-    v.y -= GRAV * dt; if (v.y < -42) v.y = -42;
+    if (level && level.wind && !this.frozen) { v.x += level.wind[0] * dt; v.z += level.wind[1] * dt; }
+    v.y -= GRAV * (M.grav || 1) * dt; if (v.y < -42) v.y = -42;
     const prevY = p.y; p.x += v.x * dt; p.y += v.y * dt; p.z += v.z * dt;
     const was = this.grounded; this.grounded = false; this.ground = null;
     if (level) for (const c of level.cols) {
