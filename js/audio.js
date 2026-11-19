@@ -17,6 +17,7 @@ const SFX = {
   hit: () => { tone(240, 70, 0.28, 'sawtooth', 0.22); tone(900, 200, 0.12, 'square', 0.08); }, tick: () => bell(660, 0.3, 0, sfxG, 0.4), go: () => { bell(880, 0.35); bell(1320, 0.3, 0.07); bell(1760, 0.25, 0.14); },
   tile: () => bell(1568, 0.12, 0, sfxG, 0.35), out: () => { tone(500, 120, 0.6, 'triangle', 0.3); }, splash: () => { tone(900, 150, 0.35, 'sine', 0.25); tone(300, 80, 0.5, 'triangle', 0.2, 0.05); },
   hover: () => tone(1400, 1700, 0.05, 'sine', 0.07), card: () => { tone(200, 900, 0.5, 'sine', 0.2); bell(784, 0.2, 0.35); bell(1174, 0.2, 0.47); },
+  pop: () => { tone(520, 820, 0.09, 'sine', 0.12); tone(1040, 1300, 0.06, 'sine', 0.04, 0.02); }, push: () => tone(260, 140, 0.12, 'triangle', 0.22),
   win: () => [523, 659, 784, 1046, 1318].forEach((f, i) => bell(f, 0.3, i * 0.11)), click: () => bell(1174, 0.14, 0, sfxG, 0.25), join: () => { bell(784, 0.2); bell(1174, 0.2, 0.12); }, check: () => { bell(988, 0.22); bell(1480, 0.2, 0.09); },
 };
 export function sfx(n) { if (!ctx) return; try { SFX[n] && SFX[n](); } catch (e) { } }

@@ -21,7 +21,7 @@ export const SKINS = [
   { id: 'menthe', nom: 'Menthe', top: '#19c7a0', bot: '#f0fff0' },
 ];
 export const skinOf = id => SKINS.find(s => s.id === id) || SKINS[0];
-export const F = { GROUND: 1, DIVE: 2, STUN: 4, WIN: 8, WAVE: 16, OUT: 32, DANCE: 64 };
+export const F = { GROUND: 1, DIVE: 2, STUN: 4, WIN: 8, WAVE: 16, OUT: 32, DANCE: 64, PUSH: 128 };
 
 const lerp = (a, b, t) => a + (b - a) * t, clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 const damp = (a, b, k, dt) => lerp(a, b, 1 - Math.exp(-k * dt));
@@ -59,7 +59,7 @@ export class Buddy {
     this.g.visible = !(s.flags & F.OUT);
     this.run = damp(this.run, gr ? clamp(s.speed / 7, 0, 1.15) : 0, 12, dt);
     this.air = damp(this.air, gr ? 0 : 1, 14, dt); this.diveK = damp(this.diveK, dive ? 1 : 0, 16, dt); this.stunK = damp(this.stunK, stun ? 1 : 0, 10, dt);
-    this.winK = damp(this.winK, win ? 1 : 0, 8, dt); this.waveK = damp(this.waveK, wave ? 1 : 0, 10, dt); this.danceK = damp(this.danceK, dance ? 1 : 0, 8, dt);
+    this.pushK = damp(this.pushK || 0, (s.flags & F.PUSH) ? 1 : 0, 26, dt); this.winK = damp(this.winK, win ? 1 : 0, 8, dt); this.waveK = damp(this.waveK, wave ? 1 : 0, 10, dt); this.danceK = damp(this.danceK, dance ? 1 : 0, 8, dt);
     if (gr && !this.wasGround) this.squash = clamp(-this.lastVy / 16, 0.25, 1); this.wasGround = gr; this.lastVy = s.vy;
     this.squash = Math.max(0, this.squash - dt * 3.2);
     this.ph += dt * (5 + this.run * 9.5); const ph = this.ph, sn = Math.sin(ph), cs = Math.cos(ph), R = this.run, A = this.air, idle = (1 - R) * (1 - A);
@@ -90,6 +90,8 @@ export class Buddy {
       N.haut.rotation.z += Math.sin(b) * 0.22 * d; N.haut.rotation.y += Math.sin(b * 0.5) * 0.5 * d; N.haut.position.y += Math.abs(Math.sin(b)) * 0.06 * d; N.jg.rotation.x += Math.max(0, Math.sin(b)) * -0.6 * d; N.jd.rotation.x += Math.max(0, -Math.sin(b)) * -0.6 * d; }
     // coucou : le bras droit salue
     if (this.waveK > 0.01) { zd = lerp(zd, 2.45 + Math.sin(t * 13) * 0.4, this.waveK); ad = lerp(ad, 0, this.waveK); }
+    // pousser : les deux bras partent devant d'un coup
+    if (this.pushK > 0.01) { ag = lerp(ag, -1.75, this.pushK); ad = lerp(ad, -1.75, this.pushK); zg = lerp(zg, 0.25, this.pushK); zd = lerp(zd, -0.25, this.pushK); N.haut.rotation.x += 0.28 * this.pushK; }
     N.bg.rotation.set(ag, 0, zg); N.bd.rotation.set(ad, 0, zd);
     N.mg.rotation.x = ag * 0.3; N.md.rotation.x = ad * 0.3;
     // --- tête : elle suit avec un peu de retard
@@ -122,10 +124,10 @@ export class Ctl {
       let d = Math.atan2(inp.x, inp.z) - this.yaw; d = Math.atan2(Math.sin(d), Math.cos(d)); this.yaw += d * (1 - Math.exp(-14 * dt));
     } else if (this.grounded) { const f = Math.exp(-(this.dive ? 3.5 : this.stun > 0 ? 4 : 12) * dt); v.x *= f; v.z *= f; }
     else if (this.stun <= 0 && !this.dive) { const f = Math.exp(-1.2 * dt); v.x *= f; v.z *= f; }
-    this.coyote = this.grounded ? 0.12 : Math.max(0, this.coyote - dt); this.jumpBuf = inp.jump ? 0.14 : Math.max(0, this.jumpBuf - dt);
+    this.coyote = this.grounded ? 0.12 : Math.max(0, this.coyote - dt); this.jumpBuf = inp.jump ? 0.14 : Math.max(0, this.jumpBuf - dt); this.diveBuf = inp.dive ? 0.25 : Math.max(0, (this.diveBuf || 0) - dt); this.diveCd = Math.max(0, (this.diveCd || 0) - dt);
     if (ctl && this.jumpBuf > 0 && this.coyote > 0) { v.y = JUMP; this.coyote = 0; this.jumpBuf = 0; this.grounded = false; this.events.push('jump'); }
-    if (ctl && inp.dive && !this.frozen) { this.dive = true; this.diveT = 0; const s = Math.max(Math.hypot(v.x, v.z), SPEED * 0.9) + 4.2; v.x = Math.sin(this.yaw) * s; v.z = Math.cos(this.yaw) * s; v.y = Math.max(v.y, 0) * 0.4 + 5.2; this.grounded = false; this.events.push('dive'); }
-    if (this.dive) { this.diveT += dt; if (this.grounded && this.diveT > 0.55) this.dive = false; if (this.diveT > 2.2) this.dive = false; }
+    if (ctl && this.diveBuf > 0 && this.diveCd <= 0 && !this.frozen) { this.dive = true; this.diveT = 0; this.diveBuf = 0; this.diveCd = 0.55; const s = Math.max(Math.hypot(v.x, v.z), SPEED * 0.9) + 4.2; v.x = Math.sin(this.yaw) * s; v.z = Math.cos(this.yaw) * s; v.y = Math.max(v.y, 0) * 0.4 + 5.2; this.grounded = false; this.events.push('dive'); }
+    if (this.dive) { this.diveT += dt; if (this.grounded && this.diveT > 0.3) this.dive = false; if (this.diveT > 1.3) this.dive = false; }
     v.y -= GRAV * dt; if (v.y < -42) v.y = -42;
     const prevY = p.y; p.x += v.x * dt; p.y += v.y * dt; p.z += v.z * dt;
     const was = this.grounded; this.grounded = false; this.ground = null;

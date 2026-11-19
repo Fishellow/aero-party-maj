@@ -5,7 +5,7 @@ import { Buddy, Ctl, SKINS, skinOf, F } from './player.js';
 import { buildLobby, buildGame, GAMES } from './games.js';
 import { Net } from './net.js';
 import { sfx, startAudio, Audio, setVol } from './audio.js';
-import { FX, initFx } from './fx.js';
+import { FX, initFx, grassShare } from './fx.js';
 
 const $ = id => document.getElementById(id), B = document.body;
 const BR = window.AERO || null;
@@ -17,7 +17,7 @@ const MENU_SPOT = [3.4, 0.3, 5.6];
 
 const G = window.__G = {
   phase: 'boot', me: { id: 'h', name: cleanName(ST.get('name', '')), skin: ST.get('skin', 'aero'), score: 0 }, P: new Map(), level: null, ctl: new Ctl(), buddy: null, game: null, lv: 0, round: 0,
-  cam: { yaw: Math.PI, pitch: 0.32, dist: 7.5, tgt: new THREE.Vector3(), pos: new THREE.Vector3(), look: new THREE.Vector3() }, opt: Object.assign({ sens: 1, vol: 0.7, mus: 0.5, q: 1 }, ST.get('opt', {})),
+  cam: { yaw: Math.PI, pitch: 0.32, dist: 7.5, tgt: new THREE.Vector3(), pos: new THREE.Vector3(), look: new THREE.Vector3() }, opt: Object.assign({ sens: 1, vol: 0.7, mus: 0.5, q: 1, auto: true }, ST.get('opt', {})),
   keys: {}, press: {}, locked: false, drag: false, spawnI: 0, myFlags: 0, emote: 0, emoteT: 0, lastGames: [], states: {}, sendT: 0, busy: false, shake: 0, kick: 0, wet: false, fade: 1, menuYaw: 0,
 };
 const me = G.me;
@@ -71,8 +71,11 @@ Net.on('start', m => onStart(m));
 Net.on('tile', (m, id) => { const i = m.i | 0; if (!G.level || !G.game || G.phase !== 'play' || !G.level.tiles[i]) return; if (Net.isHost) Net.send({ t: 'tile', i }, id); G.level.killTile(i); });
 Net.on('orb', (m, id) => { if (Net.isHost) claimOrb(m.i | 0, id); });
 Net.on('orbx', m => gotOrb(m.i, m.id));
+Net.on('pts', m => { const g = G.game; if (!g || g.def.type !== 'points' || !m.d) return; for (const id in m.d) g.pts[String(id).slice(0, 8)] = Math.round(+m.d[id]) || 0; showPts(); });
 const hostT = () => G.game ? (Net.now() - G.game.t0) / 1000 : -1;
 // arrivée annoncée par un invité : l'hôte attend (2 s au plus) que la position reçue le confirme
+Net.on('push', (m, id) => { if (Net.isHost) relayPush(id, String(m.to)); });
+Net.on('pushed', m => { if (m.to === me.id) gotPushed(+m.x || 0, +m.z || 0); const p = G.P.get(m.by); if (p) { p.pushT = 0.3; } });
 Net.on('fin', (m, id) => { const g = G.game; if (!Net.isHost || !g || g.def.type !== 'course' || hostT() < 3 || g.res[id]) return; g.pend[id] = hostT(); });
 Net.on('out', (m, id) => { const g = G.game; if (!Net.isHost || !g || g.def.type !== 'survie' || hostT() < 0) return; setRes(id, 'out', hostT()); });
 Net.on('res', m => { if (G.game && (m.k === 'fin' || m.k === 'out')) { G.game.res[String(m.id)] = { [m.k]: +m.time || 0 }; drawList(); const p = G.P.get(m.id); if (p && m.id !== me.id) toast(m.k === 'out' ? `${p.name} est éliminé` : `${p.name} est arrivé`); } });
@@ -81,7 +84,7 @@ Net.on('lobby', () => enterLobby());
 function applyState(id, d) { const p = G.P.get(id); if (!p) return; p.tgt = { x: d[0], y: d[1], z: d[2], yaw: d[3] }; p.flags = d[4]; p.speed = d[5]; p.vy = d[6]; if (p.lv !== d[7]) { p.lv = d[7]; p.snap = true; } }
 
 // ------------------------------------------------------------------ déroulé
-function setLevel(L) { if (G.level) G.level.dispose(); G.level = L; W.sunBlocked = (o, d) => L.blocked(o, d); G.fade = 1; }
+function setLevel(L) { G.fpsT = -3; G.fpsN = 0; if (G.level) G.level.dispose(); G.level = L; W.sunBlocked = (o, d) => L.blocked(o, d); G.fade = 1; }
 function placeMe(i) { const s = G.level.spawns[i % G.level.spawns.length]; G.ctl.place(s[0], s[1], s[2], s[3]); G.cam.yaw = s[3] + Math.PI; G.cam.pitch = 0.3; G.cam.dist = 7.5; G.cam.tgt.set(s[0], s[1] + 1.15, s[2]); G.spawnI = i; }
 function hideOverlays() { $('banner').style.color = ''; $('banner').style.webkitTextStroke = ''; $('card').classList.remove('on'); $('results').classList.remove('on'); center(''); $('banner').classList.remove('on'); }
 function enterLobby() {
@@ -107,10 +110,12 @@ async function joinRoom() {
   catch (e) { msg.textContent = e && e.type === 'full' ? 'Cette partie est pleine.' : 'Partie introuvable. Vérifie le code avec ton pote.'; Net.close(); }
   $('bJoin').disabled = false;
 }
-function hostStart(force) {
-  if (G.phase !== 'lobby' || (Net.online && !Net.isHost)) return;
+function hostStart(force, chain) {
+  if ((G.phase !== 'lobby' && !chain) || (Net.online && !Net.isHost)) return;
+  if (!chain) G.chain = null;
   const ids = Object.keys(GAMES).filter(g => !G.lastGames.includes(g)), id = force || ids[Math.floor(Math.random() * ids.length)]; G.lastGames.push(id); if (G.lastGames.length >= Object.keys(GAMES).length) G.lastGames = [id];
-  const m = { t: 'start', g: id, seed: Math.floor(Math.random() * 1e9), t0: Net.now() + 6500, order: everyone().map(p => p.id), lv: ++G.round };
+  const m = { t: 'start', g: id, seed: Math.floor(Math.random() * 1e9), t0: Net.now() + 6500, order: everyone().map(p => p.id), lv: ++G.round, tour: G.chain ? [G.chain.n - G.chain.left + 1, G.chain.n] : null };
+  if (G.chain) G.chain.left--;
   Net.send(m); onStart(m);
 }
 function onStart(m) {
@@ -119,11 +124,21 @@ function onStart(m) {
   setLevel(buildGame(m.g, m.seed, m.order.length, { tile: i => { if (G.phase !== 'play') return; G.level.killTile(i); FX.spark(G.level.tiles[i].c, '#bff3ff', 6, 0.5); sfx('tile'); Net.send({ t: 'tile', i }); }, say: (txt, col, sec) => { const b = $('banner'); b.style.color = col; b.style.webkitTextStroke = '10px #fff'; b.style.paintOrder = 'stroke fill'; banner(txt, sec * 1000); sfx('tick'); } }));
   G.level.onOrb = i => { if (G.phase !== 'play') { G.level.orbs[i].asked = false; return; } if (Net.isHost || !Net.online) claimOrb(i, me.id); else Net.send({ t: 'orb', i }); }; G.lastGY = 0;
   placeMe(Math.max(0, m.order.indexOf(me.id))); G.ctl.frozen = true; G.phase = 'intro'; G.myFlags = 0;
-  screen('game'); ui('main'); hideOverlays(); $('cardnum').textContent = 'Manche ' + m.lv; $('cardname').textContent = def.nom; $('cardaide').textContent = def.aide; $('card').classList.add('on'); setTimeout(() => $('card').classList.remove('on'), 3300);
+  screen('game'); ui('main'); hideOverlays(); $('cardnum').textContent = m.tour ? 'Tournoi · manche ' + (+m.tour[0] | 0) + ' sur ' + (+m.tour[1] | 0) : 'Manche ' + (m.lv | 0); $('cardname').textContent = def.nom; $('cardaide').textContent = def.aide; $('card').classList.add('on'); setTimeout(() => $('card').classList.remove('on'), 3300);
   $('gname').textContent = def.nom; $('gtime').textContent = ''; $('gtime').classList.remove('low'); drawList(); sfx('card');
 }
 function claimOrb(i, id) { const g = G.game, L = G.level; if (!g || g.over || g.def.type !== 'points' || !L.orbs[i] || L.orbs[i].taken || hostT() < L.orbs[i].at) return; if (id !== me.id) { const s = G.states[id]; if (!s || Math.hypot(s[0] - L.orbs[i].x, s[2] - L.orbs[i].z) > 4) return; } Net.send({ t: 'orbx', i, id }); gotOrb(i, id); }
-function gotOrb(i, id) { const g = G.game; if (!g || !G.level.takeOrb(i)) return; g.pts[id] = (g.pts[id] || 0) + 1; if (id === me.id) { sfx('check'); $('gname').textContent = g.def.nom + ' · ' + g.pts[id]; } }
+function gotOrb(i, id) { const g = G.game; if (!g || !G.level.takeOrb(i)) return; g.pts[id] = (g.pts[id] || 0) + 1; if (id === me.id) { sfx('pop'); $('gname').textContent = g.def.nom + ' · ' + g.pts[id]; } }
+// pousser : l'hôte vérifie que les deux joueurs sont bien côte à côte, puis prévient celui qui est poussé
+const posOf = id => id === me.id ? [G.ctl.pos.x, G.ctl.pos.y, G.ctl.pos.z] : G.states[id];
+const pushLast = {};
+function relayPush(by, to) { const a = posOf(by), b = posOf(to), now = performance.now(); if (!a || !b || by === to || now - (pushLast[by] || 0) < 600) return; const dx = b[0] - a[0], dz = b[2] - a[2], d = Math.hypot(dx, dz); if (d > 2.4 || Math.abs(b[1] - a[1]) > 1.6) return; pushLast[by] = now; const m = { t: 'pushed', to, by, x: dx / (d || 1), z: dz / (d || 1) }; Net.send(m); if (to === me.id) gotPushed(m.x, m.z); const p = G.P.get(by); if (p) p.pushT = 0.3; }
+function gotPushed(x, z) { const c = G.ctl; if (c.frozen || (G.myFlags & F.OUT)) return; c.knock(x * 9.5, 4.2, z * 9.5, 0.28); }
+function doPush() { const c = G.ctl; if (!playing() || c.frozen || c.stun > 0 || (G.pushCd || 0) > 0) return; G.pushCd = 0.7; G.pushT = 0.28; sfx('push'); const fx = Math.sin(c.yaw), fz = Math.cos(c.yaw); FX.puff({ x: c.pos.x + fx * 0.8, y: c.pos.y + 0.5, z: c.pos.z + fz * 0.8 }, 5, 0.8);
+  let best = null, bd = 1.9; for (const p of G.P.values()) { if (p.lv !== G.lv || !p.tgt || (p.flags & F.OUT)) continue; const b = p.buddy.g.position, dx = b.x - c.pos.x, dz = b.z - c.pos.z, d = Math.hypot(dx, dz); if (d < bd && Math.abs(b.y - c.pos.y) < 1.4 && (dx * fx + dz * fz) / (d || 1) > 0.2) { bd = d; best = p; } }
+  if (!best) return; if (Net.isHost) relayPush(me.id, best.id); else Net.send({ t: 'push', to: best.id }); }
+function showPts() { const g = G.game; if (g && g.def.type === 'points') $('gname').textContent = g.def.nom + ' · ' + (g.pts[me.id] || 0); }
+function hillTick(t) { const g = G.game, L = G.level; if (!L.zoneAt || (Net.online && !Net.isHost) || t < (g.hillAt || 0)) return; g.hillAt = t + 0.5; const z = L.zoneAt(t); for (const id of g.order) { const s = posOf(id); if (!s || (id !== me.id && (!G.P.has(id) || G.states[id][7] !== G.lv))) continue; if (Math.hypot(s[0] - z[0], s[2] - z[1]) < z[2] && s[1] > -0.5 && s[1] < 2.5) g.pts[id] = (g.pts[id] || 0) + 1; } Net.send({ t: 'pts', d: g.pts }); showPts(); }
 function setRes(id, k, time) { const g = G.game; if (!g || g.over || g.res[id]) return; g.res[id] = { [k]: time }; Net.send({ t: 'res', id, k, time }); drawList(); const p = G.P.get(id); if (p && id !== me.id) toast(k === 'out' ? `${p.name} est éliminé` : `${p.name} est arrivé`); }
 function report(k, time) { if (Net.isHost || !Net.online) setRes(me.id, k, time); else { G.game.res[me.id] = { [k]: time }; Net.send({ t: k, time }); drawList(); } }
 function hostCheckEnd(t) {
@@ -138,7 +153,8 @@ function hostCheckEnd(t) {
   const rank = ids.slice().sort((a, b) => val(b) - val(a)), pts = {}, scores = {};
   rank.forEach((id, i) => { pts[id] = (n - i) * 10 + (i === 0 ? 5 : 0); const p = id === me.id ? me : G.P.get(id); p.score += pts[id]; });
   for (const p of everyone()) scores[p.id] = p.score;
-  const m = { t: 'end', rank, pts, scores }; Net.send(m); onEnd(m); setTimeout(() => { if (G.phase === 'results') { Net.send({ t: 'lobby' }); enterLobby(); } }, 8000);
+  const last = G.chain && G.chain.left <= 0, m = { t: 'end', rank: last ? everyone().slice().sort((a, b) => b.score - a.score).map(p => p.id) : rank, pts, scores, fin: !!last, suite: !!(G.chain && !last) }; Net.send(m); onEnd(m);
+  const lv = G.lv; setTimeout(() => { if (G.phase !== 'results' || G.lv !== lv) return; if (G.chain && G.chain.left > 0) hostStart(null, true); else { G.chain = null; Net.send({ t: 'lobby' }); enterLobby(); } }, last ? 11000 : G.chain ? 6000 : 8000);
 }
 function onEnd(m) {
   const g = G.game, c0 = G.ctl; if (!g) return; g.over = true; G.phase = 'results'; c0.frozen = true; if (document.pointerLockElement) document.exitPointerLock();
@@ -146,7 +162,7 @@ function onEnd(m) {
   for (const p of everyone()) if (m.scores[p.id] != null) p.score = Math.round(+m.scores[p.id]) || 0;
   const byId = id => id === me.id ? me : G.P.get(id), won = m.rank[0] === me.id;
   $('reslist').innerHTML = m.rank.map((id, i) => { const p = byId(id); return p ? `<li style="--i:${i}"><span class="rk">${i + 1}</span><i style="background:${grad(skinOf(p.skin))}"></i><span class="nm">${esc(p.name)}</span><span class="pt">+${+m.pts[id] || 0}</span><span class="tot">${p.score} pts</span></li>` : ''; }).join('');
-  $('restitle').textContent = won ? 'Victoire !' : 'Résultats'; hideOverlays(); screen('game'); ui('main'); $('results').classList.add('on');
+  const champ = byId(m.rank[0]); $('restitle').textContent = m.fin ? (won ? 'Champion !' : 'Tournoi terminé') : won ? 'Victoire !' : 'Résultats'; if (m.fin && champ) banner(champ.name + ' gagne le tournoi', 9000); hideOverlays(); screen('game'); ui('main'); $('results').classList.add('on'); if (m.fin && $('restitle').textContent) banner((byId(m.rank[0]) || me).name + ' gagne le tournoi', 9000);
   G.myFlags = won ? F.WIN : (G.myFlags & F.OUT); sfx(won ? 'win' : 'check'); crowns(); drawList(); if (won && c0.pos.y > -20) FX.confetti(c0.pos, 160);
 }
 
@@ -161,12 +177,13 @@ addEventListener('keydown', e => {
   if (e.code === 'Space' || e.code === 'Tab') e.preventDefault();
   if (e.code === 'Enter' && G.phase === 'lobby' && !paused()) hostStart();
   if (e.code === 'Escape') { if (B.dataset.ui !== 'main') ui('main'); else if (!document.pointerLockElement) pause(!paused()); }
+  if (e.code === 'KeyE' || e.code === 'KeyF') doPush();
   if (e.code === 'Digit1' || e.code === 'Numpad1') { G.emote = F.WAVE; G.emoteT = 1.8; } if (e.code === 'Digit2' || e.code === 'Numpad2') { G.emote = F.DANCE; G.emoteT = 4; }
 });
 addEventListener('keyup', e => { G.keys[e.code] = false; });
 addEventListener('blur', () => { G.keys = {}; });
 addEventListener('contextmenu', e => e.preventDefault());
-cv.addEventListener('mousedown', e => { startAudio(); if (G.phase === 'menu') { G.drag = true; return; } if (!playing()) return; if (!document.pointerLockElement) { G.drag = true; lock(); } else if (e.button === 0) G.press.Dive = true; });
+cv.addEventListener('mousedown', e => { startAudio(); if (G.phase === 'menu') { G.drag = true; return; } if (!playing()) return; if (!document.pointerLockElement) { G.drag = true; lock(); } else if (e.button === 0) G.press.Dive = true; else if (e.button === 2) doPush(); });
 addEventListener('mouseup', () => { G.drag = false; });
 addEventListener('mousemove', e => { if (G.phase === 'menu') { if (G.drag) G.menuYaw += e.movementX * 0.012; return; } if (!(document.pointerLockElement === cv || G.drag) || !playing()) return; const s = 0.0024 * G.opt.sens; G.cam.yaw -= e.movementX * s; G.cam.pitch = Math.max(-0.35, Math.min(1.25, G.cam.pitch + e.movementY * s)); });
 addEventListener('wheel', e => { G.cam.dist = Math.max(4, Math.min(14, G.cam.dist + Math.sign(e.deltaY) * 0.8)); }, { passive: true });
@@ -182,10 +199,10 @@ $('bQuit').onclick = () => { if (BR) BR.quit(); else window.close(); }; $('bFull
 $('pseudo').value = ST.get('name', ''); $('pseudo').placeholder = 'Joueur';
 $('pseudo').oninput = () => { me.name = cleanName($('pseudo').value); $('platename').textContent = me.name; }; $('pseudo').onchange = () => { ST.set('name', me.name); sendMe(); drawList(); };
 $('code').oninput = e => { e.target.value = e.target.value.toUpperCase().replace(/[^A-Z]/g, ''); };
-function applyOpt() { Audio.vol = G.opt.vol; Audio.music = G.opt.mus; setVol(); W.quality = G.opt.q; if (W.renderer) { W.renderer.shadowMap.enabled = G.opt.q > 0.7; W.bloom.enabled = G.opt.q > 0.7; if (W.ao) W.ao.enabled = G.opt.q >= 1; resize(); } $('oSens').value = G.opt.sens; $('oVol').value = G.opt.vol; $('oMus').value = G.opt.mus; for (const b of $('oQual').children) b.classList.toggle('on', +b.dataset.q === G.opt.q); }
+function applyOpt() { Audio.vol = G.opt.vol; Audio.music = G.opt.mus; setVol(); W.quality = G.opt.q; if (W.renderer) { W.renderer.shadowMap.enabled = G.opt.q > 0.7; W.bloom.enabled = G.opt.q > 0.7; if (W.ao) W.ao.enabled = G.opt.q >= 1; const ms = G.opt.q >= 1 ? 2048 : 1024; if (W.sun.shadow.mapSize.x !== ms) { W.sun.shadow.mapSize.set(ms, ms); if (W.sun.shadow.map) { W.sun.shadow.map.dispose(); W.sun.shadow.map = null; } } W.scene.traverse(o => { if (o.userData.grassFull) o.count = Math.round(o.userData.grassFull * grassShare()); }); resize(); } $('oSens').value = G.opt.sens; $('oVol').value = G.opt.vol; $('oMus').value = G.opt.mus; for (const b of $('oQual').children) b.classList.toggle('on', G.opt.auto ? b.dataset.q === '0' : +b.dataset.q === G.opt.q); }
 $('oSens').oninput = e => { G.opt.sens = +e.target.value; }; $('oVol').oninput = e => { G.opt.vol = +e.target.value; applyOpt(); }; $('oMus').oninput = e => { G.opt.mus = +e.target.value; applyOpt(); };
-for (const b of $('oQual').children) b.onclick = () => { G.opt.q = +b.dataset.q; applyOpt(); ST.set('opt', G.opt); };
-G.dbg = { start: g => hostStart(g), lobby: () => { Net.send({ t: 'lobby' }); enterLobby(); }, solo: () => { Net.close(); Net.isHost = true; me.id = 'h'; enterLobby(); }, Net, ui, pause };
+for (const b of $('oQual').children) b.onclick = () => { if (b.dataset.q === '0') { G.opt.auto = true; G.opt.q = 1; } else { G.opt.auto = false; G.opt.q = +b.dataset.q; } G.fpsN = 0; G.fpsT = -3; applyOpt(); ST.set('opt', G.opt); };
+G.dbg = { tournoi: n => { for (const p of everyone()) p.score = 0; G.chain = { n: n || 5, left: n || 5 }; hostStart(null, true); }, push: doPush, start: g => hostStart(g), lobby: () => { Net.send({ t: 'lobby' }); enterLobby(); }, solo: () => { Net.close(); Net.isHost = true; me.id = 'h'; enterLobby(); }, Net, ui, pause };
 
 const fit = () => document.documentElement.style.setProperty('--z', Math.max(0.75, Math.min(2.2, innerHeight / 900)).toFixed(3)); fit(); addEventListener('resize', fit);
 // ------------------------------------------------------------------ boucle de jeu
@@ -193,6 +210,8 @@ const inp = { x: 0, z: 0, jump: false, dive: false }, V = new THREE.Vector3();
 function playLogic(t, dt) {
   const g = G.game, L = G.level, c = G.ctl, p = c.pos;
   if (G.phase === 'intro') { const left = (g.t0 - Net.now()) / 1000, n = Math.ceil(left); if (n <= 3 && n >= 1 && n !== g.cd) { g.cd = n; center(String(n)); sfx('tick'); } if (left <= 0) { G.phase = 'play'; c.frozen = false; center('GO !'); sfx('go'); setTimeout(() => { if ($('center').textContent === 'GO !') center(''); }, 900); } }
+  if ((G.phase === 'results' || g.done) && !(G.myFlags & F.OUT) && (p.y < L.killY || (L.fall && c.grounded === false && p.y < (G.lastGY || 0) - 14))) { const k = g.def.type === 'course' && g.done ? [0, L.finishY + 1.2, L.finishZ + 3] : L.spawns[G.spawnI]; c.place(k[0] + (Math.random() - 0.5) * 3, k[1] + 0.5, k[2], 0); G.fade = 0.6; }
+  if (c.grounded) G.lastGY = p.y;
   if (G.phase !== 'play') return;
   const left = Math.max(0, g.def.duree - t); $('gtime').textContent = Math.floor(left / 60) + ':' + String(Math.floor(left % 60)).padStart(2, '0'); $('gtime').classList.toggle('low', left < 10);
   if (!g.done) {
@@ -201,7 +220,7 @@ function playLogic(t, dt) {
       if (c.grounded) G.lastGY = p.y;
       if (p.y < L.killY || (L.fall && p.y < G.lastGY - L.fall)) { G.lastGY = -99; const k = g.check >= 0 ? L.checks[g.check] : L.spawns[G.spawnI]; c.place(k[0] + (Math.random() - 0.5) * 3, k[1] + 0.5, k[2], 0); G.fade = 0.6; }
       if (p.z > L.finishZ && p.y > L.finishY && c.grounded) { g.done = true; report('fin', t); const pos = Object.keys(g.res).length; banner(pos <= 1 ? 'Premier !' : `Arrivé ${pos}e`, 4000); G.myFlags = F.WIN; sfx('win'); FX.confetti(p, 140); }
-    } else if (g.def.type === 'points') { if (p.y < L.killY) { placeMe(G.spawnI); G.fade = 0.6; } }
+    } else if (g.def.type === 'points') { if (p.y < L.killY) { placeMe(G.spawnI); G.fade = 0.6; } hillTick(t); }
     else if (p.y < L.killY) { g.done = true; report('out', t); G.myFlags = F.OUT; c.frozen = true; banner('Éliminé', 3500); sfx('out'); }
   }
   hostCheckEnd(t);
@@ -245,12 +264,14 @@ function frame(viaTimer) {
     // portiques du lobby : on reste dessus pour lancer la manche, on passe dessous pour se changer
     if (G.phase === 'lobby' && !paused()) { const z = L.zones.find(z => Math.hypot(c.pos.x - z.x, c.pos.z - z.z) < z.r && c.pos.y < 1.6) || null, host = Net.isHost || !Net.online;
       if (z !== G.zone) { G.zone = z; G.zoneT = 0; G.zoneN = 9; if (!z) $('banner').classList.remove('on'); else { FX.ring(z, z.tint, 8); sfx('check'); if (z.id === 'skin') { pause(true); ui('skin'); } else if (!host) banner('Seul l\'hôte lance la manche', 2200); } }
+      if (z && z.id === 'tour' && host) { G.zoneT += dt; const n = Math.ceil(3 - G.zoneT); if (n !== G.zoneN) { G.zoneN = n; if (n > 0) { banner('Tournoi dans ' + n, 0); sfx('tick'); FX.ring(z, z.tint, 9); FX.spark({ x: z.x, y: 0.4, z: z.z }, z.tint, 14, 0.8); } } if (G.zoneT >= 3) { $('banner').classList.remove('on'); G.zone = null; for (const p of everyone()) p.score = 0; pushRoster(); G.chain = { n: 5, left: 5 }; hostStart(null, true); } }
       if (z && z.id === 'play' && host) { G.zoneT += dt; const n = Math.ceil(3 - G.zoneT); if (n !== G.zoneN) { G.zoneN = n; if (n > 0) { banner('Départ dans ' + n, 0); sfx('tick'); FX.ring(z, z.tint, 9); FX.spark({ x: z.x, y: 0.4, z: z.z }, z.tint, 14, 0.8); } } if (G.zoneT >= 3) { $('banner').classList.remove('on'); G.zone = null; hostStart(); } } }
     if (g) playLogic(t, dt);
   }
   // mon personnage
   G.emoteT -= dt; if (G.emoteT <= 0 || Math.hypot(c.vel.x, c.vel.z) > 1.5 || !c.grounded) G.emote = 0;
-  const flags = (G.myFlags & F.OUT) ? F.OUT : (c.flags | G.myFlags | G.emote), sp = Math.hypot(c.vel.x, c.vel.z);
+  G.pushCd = Math.max(0, (G.pushCd || 0) - dt); G.pushT = Math.max(0, (G.pushT || 0) - dt);
+  const flags = (G.myFlags & F.OUT) ? F.OUT : (c.flags | G.myFlags | G.emote | (G.pushT > 0 ? F.PUSH : 0)), sp = Math.hypot(c.vel.x, c.vel.z);
   if (G.buddy) { if (menu) { const spin = B.dataset.ui === 'skin'; if (!G.drag) G.menuYaw += spin ? dt * 0.5 : (-0.3 - G.menuYaw) * (1 - Math.exp(-2 * dt)); c.yaw = G.menuYaw; }
     G.buddy.g.position.copy(c.pos); G.buddy.g.rotation.y = c.yaw; G.buddy.animate(dt, { speed: sp, vy: c.vel.y, flags: menu ? F.GROUND | (W.time % 9 < 1.8 ? F.WAVE : 0) : flags }); }
   // les autres
@@ -265,6 +286,7 @@ function frame(viaTimer) {
   { const who = W.grassWho.value; let i = 0; who[i++].copy(c.pos); for (const p of G.P.values()) if (i < 8 && p.buddy.g.visible) who[i++].copy(p.buddy.g.position); for (; i < 8; i++) who[i].set(0, -999, 0); }
   G.fade = Math.max(0, G.fade - dt * 1.8); W.fade = G.fade * G.fade;
   if (B.dataset.phase !== G.phase) B.dataset.phase = G.phase;
+  if (viaTimer !== true && !document.hidden) { G.fpsT = (G.fpsT || 0) + dt; if (G.fpsT > 0) G.fpsN = (G.fpsN || 0) + 1; if (G.fpsT >= 2.5) { const fps = G.fpsN / G.fpsT; G.fpsT = 0; G.fpsN = 0; if (G.opt.auto && fps < 48 && G.opt.q > 0.6) { G.opt.q = G.opt.q >= 1 ? 0.8 : 0.6; G.fpsT = -3; applyOpt(); ST.set('opt', G.opt); toast('Qualité réduite pour garder le jeu fluide', 3500); } } }
   FX.update(dt); camera(dt); renderWorld(dt, menu ? V.set(MENU_SPOT[0], 0, MENU_SPOT[2]) : G.cam.tgt);
   if (viaTimer !== true) raf = requestAnimationFrame(frame);
 }

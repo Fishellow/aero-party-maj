@@ -132,6 +132,7 @@ export function buildLobby() {
   const petals = ['#ff5aa8', '#ffd21f', '#ffffff', '#a04dff', '#ff8a1f', '#19c7ff'];
   for (let i = 0; i < 110; i++) { const a = R() * TAU, d = 8.3 + R() * 14, x = Math.cos(a) * d, z = Math.sin(a) * d; const aa = ((Math.atan2(-z, x) - Math.PI / 4) % (Math.PI / 2) + Math.PI / 2) % (Math.PI / 2); if (Math.min(aa, Math.PI / 2 - aa) * d < 1.9) continue; L.deco('fleur', x, 0.03, z, { rot: R() * TAU, scale: 0.9 + R() * 0.9, tint: petals[i % petals.length], only: ['petale'] }); }
   // de quoi s'amuser en attendant : trampolines, bumpers, tourniquet
+  { const tx = -19.2, gate = L.gate('TOURNOI', tx, 0.03, 0, { rot: Math.PI / 2, scale: 0.6, tint: '#a04dff', only: ['orbe', 'bande'], c1: '#c58bff', c2: '#6a12e0' }), pad = L.deco('plot', tx, 0.05, 0, { scale: 1.15 }); L.zones.push({ id: 'tour', x: tx, y: 0.3, z: 0, r: 1.9, tint: '#c58bff' }); L.anims.push(t => { const k = 1.15 + Math.sin(t * 3 + 2) * 0.04; pad.scale.set(k, 1, k); if (Math.random() < 0.035) FX.spark({ x: tx + (Math.random() - 0.5) * 3, y: 0.3, z: (Math.random() - 0.5) * 3 }, '#c58bff', 1, 0.25); }); }
   L.tramp(-12.5, 0.45, 0, 1.7, '#19c7ff', 18); L.tramp(12.5, 0.45, 0, 1.7, '#ff5ac8', 22);
   L.bumper(0, 0.03, 13, 1.1, '#ffd21f'); L.bumper(2.6, 0.03, 15, 0.9, '#3fe26a'); L.bumper(-2.6, 0.03, 15, 0.9, '#ff8a1f');
   L.bar(0, 0.03, -13.5, 4.2, t => t * 1.5, { tint: '#a04dff' });
@@ -226,6 +227,35 @@ function tour(L, seed, n) {
   for (let i = 0; i < 16; i++) { const an = -0.9 - i * 0.16; L.spawns.push([Math.cos(an) * 10, 0.2, Math.sin(an) * 10, an > -99 ? Math.atan2(Math.cos(0) * 8.2 - Math.cos(an) * 10, -Math.sin(an) * 10) : 0]); }
   backdrop(L, seed, { y: 16, r: 70, n: 20, fish: 22, fr: 16, balloons: 8 });
 }
+function colline(L, seed, n) {
+  L.killY = -12; L.cyl(0, 0, 0, 11.5, { tint: '#3fe26a', thick: 3 });
+  const ph = rng(seed)() * 9, at = t => [6.6 * Math.sin(t * 0.31 + ph), 6.6 * Math.sin(t * 0.23 + 1.3 + ph * 0.7), 2.7];
+  const pad = L.deco('plot', 0, 0.02, 0, { scale: 1.55 }), ring = new THREE.Mesh(new THREE.CylinderGeometry(2.7, 2.7, 0.9, 48, 1, true), new THREE.MeshBasicMaterial({ color: new THREE.Color(1.6, 1.3, 0.25), transparent: true, opacity: 0.2, side: THREE.DoubleSide, depthWrite: false, toneMapped: false })); ring.userData.noAO = true; L.root.add(ring);
+  L.zoneAt = at; L.ticks.push(t => { const z = at(t); pad.position.set(z[0], 0.02, z[1]); ring.position.set(z[0], 0.47, z[1]); ring.material.opacity = 0.3 + Math.sin(t * 5) * 0.1; pad.rotation.y = t; });
+  L.bar(0, 0, 0, 10.8, t => t * 1.05, { tint: '#ff5ac8', power: 0.9 });
+  for (let i = 0; i < 16; i++) { const an = i / Math.max(n, 5) * TAU + 0.5; L.spawns.push([Math.cos(an) * 9.6, 0.2, Math.sin(an) * 9.6, Math.atan2(-Math.cos(an), -Math.sin(an))]); }
+  backdrop(L, seed, { y: -6, r: 62, n: 16, fish: 20, fr: 17 });
+}
+function maree(L, seed, n) {
+  const R = rng(seed); L.killY = -8; L.cyl(0, 0, 0, 10, { tint: '#19c7ff', thick: 3 });
+  let a = R() * TAU, y = 0;
+  for (let i = 0; i < 34; i++) { a += 0.75 + R() * 0.5; y += 0.95 + R() * 0.35; const d = 3.5 + R() * 5.5, x = Math.cos(a) * d, z = Math.sin(a) * d, tint = RAINBOW[i % 8];
+    if (i % 9 === 4) L.tramp(x, y - 0.4, z, 1.5, tint, 15); else if (i % 7 === 3) L.cyl(x, y, z, 1.9, { tint, move: t => [x + Math.sin(t * 1.2 + i) * 1.6, y, z] }); else L.cyl(x, y, z, 1.7 + R() * 0.7, { tint }); }
+  L.cyl(0, y + 1.1, 0, 3.2, { tint: '#ffd21f' }); L.deco('couronne', 0, y + 2.0, 0, { scale: 3, spin: 1 });
+  const sea = new THREE.Mesh(new THREE.CircleGeometry(90, 48).rotateX(-Math.PI / 2), W.mats.eau); sea.userData.noAO = true; sea.renderOrder = 2; L.root.add(sea);
+  const top = y + 3; L.ticks.push(t => { const wy = Math.min(top + 2, -6 + 0.36 * t + 0.0026 * t * t) + Math.sin(t * 1.4) * 0.12; sea.position.y = wy; L.killY = wy - 0.35; });
+  for (let i = 0; i < 16; i++) { const an = i / Math.max(n, 5) * TAU + 0.2; L.spawns.push([Math.cos(an) * 8, 0.2, Math.sin(an) * 8, Math.atan2(-Math.cos(an), -Math.sin(an))]); }
+  backdrop(L, seed, { y: 12, r: 66, n: 18, fish: 22, fr: 16, balloons: 7 });
+}
+function avalanche(L, seed, n) {
+  L.killY = -12; const R = rng(seed); L.box(0, 0, 0, 24, 17, { tint: '#ff8a1f', thick: 3 });
+  const sp = t => t * (1 + Math.min(t, 90) * 0.011);
+  for (let i = 0; i < 9; i++) { const lane = -7 + i * 1.75, dir = i % 2 ? 1 : -1, v = 4.2 + R() * 3.2, ph = R() * 34, s = 1.05 + (i % 3) * 0.22;
+    L.bumper(0, 0, lane, s, RAINBOW[i % 8], t => [dir * (-17 + ((sp(t) * v + ph) % 34)), lane]); }
+  L.rail(-12, -8.5, 12, -8.5, 0); L.rail(-12, 8.5, 12, 8.5, 0);
+  for (let i = 0; i < 16; i++) L.spawns.push([-9 + (i % 8) * 2.6, 0.2, i < 8 ? -0.9 : 0.9, 0]);
+  backdrop(L, seed, { y: -6, r: 62, n: 16, fish: 20, fr: 18 });
+}
 const COULEURS = [['ROUGE', '#ff3b5c'], ['JAUNE', '#ffd21f'], ['VERT', '#3fe26a'], ['BLEU', '#19a4ff']];
 function couleurs(L, seed, n, hooks) {
   L.killY = -10; const R = rng(seed), G = 6, S = 3.5, tiles = [], bag = [];
@@ -247,6 +277,9 @@ export const GAMES = {
   flipper: { nom: 'Flipper Géant', aide: 'Les bumpers tournent de plus en plus vite. Ne te fais pas éjecter.', type: 'survie', duree: 120, build: flipper },
   bulles: { nom: 'Chasse aux Bulles', aide: 'Ramasse le plus de bulles dorées en 45 secondes.', type: 'points', duree: 45, build: bulles },
   tour: { nom: 'Tour des Nuages', aide: 'Grimpe tout en haut de la tour avant les autres.', type: 'course', duree: 180, build: tour },
+  colline: { nom: 'Roi de la Colline', aide: 'Reste dans le cercle doré pour marquer. Pousse les autres dehors avec E.', type: 'points', duree: 60, build: colline },
+  maree: { nom: 'Marée Montante', aide: 'L\'eau monte. Grimpe de plateforme en plateforme, le dernier au sec gagne.', type: 'survie', duree: 150, build: maree },
+  avalanche: { nom: 'Avalanche de Billes', aide: 'Des billes géantes traversent le plateau. Esquive-les le plus longtemps possible.', type: 'survie', duree: 120, build: avalanche },
   couleurs: { nom: 'Couleur Magique', aide: 'Cours sur la couleur annoncée : toutes les autres dalles tombent.', type: 'survie', duree: 150, build: couleurs },
 };
 export function buildGame(id, seed, n, hooks) { const L = new Level(); L.name = id; GAMES[id].build(L, seed, n, hooks); return L; }

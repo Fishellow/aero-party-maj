@@ -1,6 +1,6 @@
 // Parties en ligne : un joueur héberge, les autres le rejoignent avec un code. Tout passe par l'hôte.
 // XPeer (lib/xpeer.js) ouvre la liaison directe entre joueurs, avec un chemin de secours.
-const GUEST_MAY = new Set(['hi', 'me', 's', 'tile', 'fin', 'out', 'orb']);
+const GUEST_MAY = new Set(['hi', 'me', 's', 'tile', 'fin', 'out', 'orb', 'push']);
 export const Net = {
   peer: null, isHost: false, online: false, code: '', myId: 'h', conns: new Map(), hostConn: null, offset: 0, rtt: 1e9, handlers: {}, seq: 0, timer: null,
   now() { return performance.now() + this.offset; },

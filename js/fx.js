@@ -29,12 +29,13 @@ function grassMaterial() {
   };
   return m;
 }
+export const grassShare = () => W.quality >= 1 ? 1 : W.quality >= 0.8 ? 0.55 : 0.25;
 /** plante de l'herbe. pick(R) renvoie [x, y, z] ou null si on ne peut pas pousser là. */
 export function makeGrass(parent, count, pick, R, size = 1) {
   const pts = []; for (let i = 0; i < count * 3 && pts.length < count; i++) { const p = pick(R); if (p) pts.push(p); }
   const mesh = new THREE.InstancedMesh(blade(), grassMaterial(), pts.length), info = new Float32Array(pts.length * 3), M = new THREE.Matrix4(), Q = new THREE.Quaternion(), S = new THREE.Vector3(), P = new THREE.Vector3(), Y = new THREE.Vector3(0, 1, 0);
   pts.forEach((p, i) => { const h = (0.22 + R() * R() * 0.5) * size; P.set(p[0], p[1], p[2]); Q.setFromAxisAngle(Y, R() * Math.PI * 2); S.set(0.07 + R() * 0.07, h, 1); M.compose(P, Q, S); mesh.setMatrixAt(i, M); info[i * 3] = R() * 6.28; info[i * 3 + 1] = R(); info[i * 3 + 2] = (R() - 0.5) * 0.5; });
-  mesh.geometry = blade().clone(); mesh.geometry.setAttribute('aInfo', new THREE.InstancedBufferAttribute(info, 3)); mesh.receiveShadow = true; mesh.frustumCulled = false; mesh.userData.noAO = true; parent.add(mesh); return mesh;
+  mesh.geometry = blade().clone(); mesh.geometry.setAttribute('aInfo', new THREE.InstancedBufferAttribute(info, 3)); mesh.receiveShadow = true; mesh.frustumCulled = false; mesh.userData.noAO = true; mesh.userData.grassFull = pts.length; mesh.count = Math.round(pts.length * grassShare()); parent.add(mesh); return mesh;
 }
 
 // ------------------------------------------------------------------ particules

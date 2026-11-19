@@ -191,7 +191,7 @@ const TINTABLE = { bande: 1, orbe: 1, dalle: 1, petale: 1, poisson_a: 1, verre: 
 
 export async function initWorld(canvas) {
   const r = W.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-  r.setPixelRatio(Math.min(devicePixelRatio, 2)); r.shadowMap.enabled = true; r.shadowMap.type = THREE.PCFSoftShadowMap;
+  r.setPixelRatio(Math.min(devicePixelRatio, 1.5)); r.shadowMap.enabled = true; r.shadowMap.type = THREE.PCFSoftShadowMap;
   r.toneMapping = THREE.NeutralToneMapping; r.toneMappingExposure = 0.9;
   const sc = W.scene = new THREE.Scene(); sc.fog = new THREE.Fog(0x9fdcff, 220, 1100);
   W.cam = new THREE.PerspectiveCamera(62, 1, 0.1, 2000);
@@ -239,7 +239,7 @@ export async function initWorld(canvas) {
   return W;
 }
 export function resize() {
-  const w = innerWidth, h = innerHeight, pr = Math.min(devicePixelRatio, 2) * W.quality;
+  const w = innerWidth, h = innerHeight, pr = Math.min(devicePixelRatio, 1.5) * W.quality;
   W.renderer.setPixelRatio(pr); W.renderer.setSize(w, h, false); W.comp.setPixelRatio(pr); W.comp.setSize(w, h); W.cam.aspect = w / h; W.cam.updateProjectionMatrix();
 }
 
