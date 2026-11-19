@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Aero Party</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="style.css">
+<script type="importmap">{ "imports": { "three": "./lib/three.module.js" } }</script>
+<script>const PEEROPT = { host: '0.peerjs.com', port: 443, secure: true };</script>
+<script src="lib/peerjs.min.js"></script>
+<script src="lib/xpeer.js"></script>
+</head>
+<body data-screen="load" data-ui="main">
+<canvas id="c"></canvas>
+<div id="dim"></div>
+
+<!-- chargement -->
+<div id="load">
+  <div class="logo big"><i class="orb"></i><span>aero</span><b>party</b></div>
+  <div class="bar"><i id="loadbar"></i></div>
+  <p id="loadtxt">Préparation de l'île</p>
+</div>
+
+<!-- menu principal -->
+<div id="menu">
+  <div class="logo"><i class="orb"></i><span>aero</span><b>party</b></div>
+  <nav id="mainnav" class="nav">
+    <button id="bCreate" class="primary"><b>Jouer</b><small>Crée une partie et invite tes potes</small></button>
+    <button id="bGoJoin"><b>Rejoindre</b><small>Entre le code d'un pote</small></button>
+    <button id="bGoSkin"><b>Vestiaire</b><small>Choisis ton personnage</small></button>
+    <button id="bGoOpt"><b>Options</b></button>
+    <button id="bQuit"><b>Quitter</b></button>
+  </nav>
+  <button id="plate" title="Changer de pseudo"><i id="plateorb"></i><span><small>Joueur</small><b id="platename"></b></span></button>
+  <div id="ver"></div>
+</div>
+
+<!-- pause -->
+<nav id="pausenav" class="nav">
+  <h2>Pause</h2>
+  <button id="bResume" class="primary"><b>Reprendre</b></button>
+  <button id="bGoSkin2"><b>Vestiaire</b></button>
+  <button id="bGoOpt2"><b>Options</b></button>
+  <button id="bLeave"><b>Quitter la partie</b></button>
+</nav>
+
+<!-- volets -->
+<section id="pJoin" class="sheet">
+  <h2>Rejoindre</h2>
+  <p>Demande le code à quatre lettres à celui qui a créé la partie.</p>
+  <input id="code" maxlength="4" placeholder="····" spellcheck="false" autocomplete="off" aria-label="Code de la partie">
+  <button class="btn" id="bJoin">Rejoindre la partie</button>
+  <p id="joinmsg" class="msg"></p>
+  <button class="back">Retour</button>
+</section>
+<section id="pSkin" class="sheet">
+  <h2>Vestiaire</h2>
+  <label class="field"><span>Pseudo</span><input id="pseudo" maxlength="14" spellcheck="false" autocomplete="off"></label>
+  <div class="field"><span>Couleur <em id="skinname"></em></span><div id="skins" class="skins"></div></div>
+  <button class="back">Retour</button>
+</section>
+<section id="pOpt" class="sheet">
+  <h2>Options</h2>
+  <label class="field"><span>Sensibilité de la souris</span><input type="range" id="oSens" min="0.3" max="2.5" step="0.05"></label>
+  <label class="field"><span>Volume des sons</span><input type="range" id="oVol" min="0" max="1" step="0.05"></label>
+  <label class="field"><span>Volume de la musique</span><input type="range" id="oMus" min="0" max="1" step="0.05"></label>
+  <div class="field"><span>Qualité de l'image</span><div class="seg" id="oQual"><button data-q="0.6">Rapide</button><button data-q="0.8">Équilibrée</button><button data-q="1">Maximale</button></div></div>
+  <div class="field"><span>Affichage</span><div class="seg"><button id="bFull">Plein écran / fenêtre (F11)</button></div></div>
+  <div class="keys">
+    <div><kbd>Z</kbd><kbd>Q</kbd><kbd>S</kbd><kbd>D</kbd><span>Bouger</span></div><div><kbd>Espace</kbd><span>Sauter</span></div><div><kbd>Clic</kbd><span>Plonger</span></div>
+    <div><kbd>1</kbd><span>Coucou</span></div><div><kbd>2</kbd><span>Danser</span></div><div><kbd>Échap</kbd><span>Pause</span></div>
+  </div>
+  <button class="back">Retour</button>
+</section>
+
+<!-- en jeu -->
+<div id="hud">
+  <div id="room"><small>Partie</small><b id="roomcode"></b><button id="bCopy" class="mini">Copier</button></div>
+  <ul id="plist"></ul>
+  <div id="top"><b id="gname"></b><span id="gtime"></span></div>
+  <div id="center"></div>
+  <div id="banner"></div>
+  <button id="prompt"></button>
+</div>
+<div id="card"><div class="band"><small id="cardnum"></small><h2 id="cardname"></h2><p id="cardaide"></p></div></div>
+<div id="results"><h2 id="restitle">Résultats</h2><ol id="reslist"></ol></div>
+<div id="toast"></div>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
