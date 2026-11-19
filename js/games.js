@@ -6,10 +6,10 @@ import { makeGrass, bannerTexture, boardTexture, FX } from './fx.js';
 
 export const rng = seed => () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
 const RAINBOW = ['#ff3b5c', '#ff8a1f', '#ffd21f', '#3fe26a', '#19c7ff', '#3d6bff', '#a04dff', '#ff5ac8'];
-const TAU = Math.PI * 2;
+const TAU = Math.PI * 2, ORB_GEO = new THREE.SphereGeometry(0.42, 22, 16), ORB_MAT = new THREE.MeshBasicMaterial({ color: new THREE.Color(1.9, 1.35, 0.18), toneMapped: false });
 
 export class Level {
-  constructor() { this.root = new THREE.Group(); W.scene.add(this.root); this.cols = []; this.movers = []; this.bars = []; this.bumpers = []; this.spawns = []; this.checks = []; this.anims = []; this.killY = -20; this.tiles = []; this.hit = 0; this.zones = []; clearSpins(); }
+  constructor() { this.root = new THREE.Group(); W.scene.add(this.root); this.cols = []; this.movers = []; this.bars = []; this.bumpers = []; this.spawns = []; this.checks = []; this.anims = []; this.killY = -20; this.tiles = []; this.hit = 0; this.zones = []; this.orbs = []; this.ticks = []; clearSpins(); }
   dispose() { W.scene.remove(this.root); clearSpins(); }
   col(c) { c.on = true; c.dx = c.dy = c.dz = 0; this.cols.push(c); return c; }
   /** plateforme ronde : dessus à la hauteur y */
@@ -30,7 +30,10 @@ export class Level {
     vis.userData.spin.scale.x = half / s; this.col({ k: 'c', x, y: y + 0.85 * s, z, r: 0.95 * s, h: 0.85 * s });
     const b = { x, y: y + 0.75 * s, z, half, rad: 0.3 * s, ang, node: vis.userData.spin, a: 0, w: 0, power: o.power || 1 }; this.bars.push(b); return b;
   }
-  bumper(x, y, z, s = 1, tint) { const vis = spawn('bumper', { parent: this.root, pos: [x, y, z], scale: s, tint, only: ['orbe'] }); this.col({ k: 'c', x, y: y + 0.3 * s, z, r: 0.9 * s, h: 0.3 * s }); this.bumpers.push({ x, y: y + 0.82 * s, z, r: 0.85 * s, vis, k: 0, s }); }
+  bumper(x, y, z, s = 1, tint, move) { const vis = spawn('bumper', { parent: this.root, pos: [x, y, z], scale: s, tint, only: ['orbe'] }); if (!move) this.col({ k: 'c', x, y: y + 0.3 * s, z, r: 0.9 * s, h: 0.3 * s }); this.bumpers.push({ x, y: y + 0.82 * s, z, r: 0.85 * s, vis, k: 0, s, move }); }
+  /** bulle dorée à ramasser, visible à partir du temps `at` */
+  orb(x, y, z, at) { const g = new THREE.Group(), core = new THREE.Mesh(ORB_GEO, ORB_MAT), halo = new THREE.Mesh(ORB_GEO, W.mats.verre_clair); halo.scale.setScalar(1.55); halo.userData.noAO = true; core.castShadow = true; g.add(core, halo); g.position.set(x, y, z); g.visible = false; this.root.add(g); this.orbs.push({ x, y, z, at, g, taken: false, asked: false }); }
+  takeOrb(i) { const o = this.orbs[i]; if (!o || o.taken) return false; o.taken = true; o.g.visible = false; FX.spark(o, '#ffe45a', 16, 0.9); FX.ring(o, '#ffe45a', 5); return true; }
   tramp(x, y, z, s = 1.6, tint, power = 19) { const vis = spawn('trampoline', { parent: this.root, pos: [x, y, z], scale: s, tint, only: ['bande'] }); const c = this.col({ k: 'c', x, y: y + 0.05, z, r: s * 0.95, h: 0.5 * s, bounce: power, hitT: 9 }); this.anims.push((t, dt) => { c.hitT += dt; const k = Math.max(0, 1 - c.hitT * 2.5); vis.scale.set(s * (1 + k * 0.12), s * (1 - k * 0.5 * Math.cos(c.hitT * 30)), s * (1 + k * 0.12)); }); }
   deco(name, x, y, z, o = {}) { return spawn(name, Object.assign({ parent: this.root, pos: [x, y, z] }, o)); }
   /** dalle de verre qui disparaît après qu'on a marché dessus */
@@ -52,6 +55,10 @@ export class Level {
     for (const b of this.bars) { const a = b.ang(t); b.w = dt > 0 ? (a - b.a) / dt : 0; b.a = a; b.node.rotation.y = a; }
     for (const T of this.tiles) if (T.dying && T.c.on) { T.t += dt; const k = T.t / 0.6; T.vis.position.y = T.c.y - k * k * 0.5; T.vis.scale.setScalar(Math.max(0.01, 1 - k * k * 0.9)); T.vis.rotation.y = Math.sin(T.t * 40) * 0.06; if (k >= 1) { T.c.on = false; T.vis.visible = false; } }
     for (const f of this.anims) f(t, dt);
+    for (const f of this.ticks) f(t, dt, ctl);
+    for (const B of this.bumpers) if (B.move) { const p = B.move(t); B.x = p[0]; B.z = p[1]; B.vis.position.x = p[0]; B.vis.position.z = p[1]; }
+    for (let i = 0; i < this.orbs.length; i++) { const o = this.orbs[i]; if (o.taken) continue; const on = t >= o.at; o.g.visible = on; if (!on) continue; const k = Math.min(1, (t - o.at) * 3); o.g.position.y = o.y + Math.sin(t * 3 + i) * 0.18; o.g.rotation.y = t * 2 + i; o.g.scale.setScalar(k * (1 + Math.sin(t * 6 + i) * 0.06));
+      if (ctl && !o.asked && Math.hypot(ctl.pos.x - o.x, ctl.pos.y + 0.6 - o.y, ctl.pos.z - o.z) < 1.25) { o.asked = true; this.onOrb && this.onOrb(i); } }
     for (const B of this.bumpers) { B.k = Math.max(0, B.k - dt * 3); const k = B.k; B.vis.scale.set(B.s * (1 + k * 0.25), B.s * (1 - k * 0.2), B.s * (1 + k * 0.25)); }
     if (!ctl) return;
     this.hit = Math.max(0, this.hit - dt); const p = ctl.pos;
@@ -185,9 +192,61 @@ function tourniquet(L, seed, n) {
   for (let i = 0; i < 8; i++) { const an = i / 8 * TAU; L.deco('lampe', Math.cos(an) * 9.1, 0, Math.sin(an) * 9.1, { rot: -an + Math.PI, scale: 0.8 }); }
   backdrop(L, seed, { y: -6, r: 60, n: 16, fish: 22, fr: 15 });
 }
+function flipper(L, seed, n) {
+  L.killY = -12; L.cyl(0, 0, 0, 11, { tint: '#ff5ac8', thick: 3 });
+  const R = rng(seed), sp = t => t * (1 + Math.min(t, 80) * 0.012);
+  L.bumper(0, 0, 0, 1.7, '#ffd21f');
+  for (let i = 0; i < 7; i++) { const rad = 3.6 + (i % 4) * 1.9, w = (0.5 + R() * 0.5) * (i % 2 ? -1 : 1), ph = R() * TAU, wob = 0.8 + R() * 1.2; L.bumper(rad, 0, 0, 0.95 + (i % 3) * 0.15, RAINBOW[i], t => { const a = ph + sp(t) * w, r = rad + Math.sin(sp(t) * wob + ph) * 1.4; return [Math.cos(a) * r, Math.sin(a) * r]; }); }
+  for (let i = 0; i < 16; i++) { const an = i / Math.max(n, 5) * TAU + 0.4; L.spawns.push([Math.cos(an) * 9.4, 0.2, Math.sin(an) * 9.4, Math.atan2(-Math.cos(an), -Math.sin(an))]); }
+  for (let i = 0; i < 10; i++) { const an = i / 10 * TAU; L.deco('lampe', Math.cos(an) * 10.6, 0, Math.sin(an) * 10.6, { rot: -an + Math.PI, scale: 0.7 }); }
+  backdrop(L, seed, { y: -6, r: 60, n: 16, fish: 22, fr: 16 });
+}
+function bulles(L, seed, n) {
+  L.killY = -12; const R = rng(seed); L.cyl(0, 0, 0, 13, { tint: '#ffd21f', thick: 3 });
+  const tops = [[0, 0, 0]];
+  [[7, 2.2, 0], [-7, 2.2, 0], [0, 3.4, 7.5], [0, 3.4, -7.5], [0, 5.6, 0]].forEach(([x, y, z], i) => { L.cyl(x, y, z, i === 4 ? 2.6 : 2.2, { tint: RAINBOW[i + 2] }); tops.push([x, y, z]); });
+  L.tramp(4.2, 0, 4.2, 1.4, '#19c7ff', 17); L.tramp(-4.2, 0, -4.2, 1.4, '#ff5ac8', 17); L.tramp(-4.2, 0, 4.2, 1.4, '#3fe26a', 21); L.tramp(4.2, 0, -4.2, 1.4, '#a04dff', 21);
+  L.bar(0, 0, 0, 11.5, t => t * 0.9, { tint: '#ff8a1f', power: 0.8 });
+  for (let i = 0; i < 70; i++) { const k = R(); let x, y, z; if (k < 0.62) { const a = R() * TAU, d = 2 + Math.sqrt(R()) * 10; x = Math.cos(a) * d; z = Math.sin(a) * d; y = 0.9 + (R() < 0.25 ? 1.6 : 0); } else if (k < 0.85) { const p = tops[1 + Math.floor(R() * 5)]; x = p[0] + (R() - 0.5) * 2; z = p[2] + (R() - 0.5) * 2; y = p[1] + 0.9; } else { const s = [[4.2, 4.2], [-4.2, -4.2], [-4.2, 4.2], [4.2, -4.2]][Math.floor(R() * 4)]; x = s[0]; z = s[1]; y = 3.2 + R() * 3; }
+    L.orb(x, y, z, i < 6 ? 0 : (i - 5) * 0.62); }
+  for (let i = 0; i < 16; i++) { const an = i / Math.max(n, 5) * TAU + 0.3; L.spawns.push([Math.cos(an) * 10.5, 0.2, Math.sin(an) * 10.5, Math.atan2(-Math.cos(an), -Math.sin(an))]); }
+  backdrop(L, seed, { y: -6, r: 62, n: 16, fish: 20, fr: 18 });
+}
+function tour(L, seed, n) {
+  L.killY = -14; L.fall = 9; L.cyl(0, 0, 0, 12, { tint: '#19c7ff', thick: 3 }); L.deco('tour_a', 0, 0, 0, { scale: 1.42 }); L.col({ k: 'c', x: 0, y: 60, z: 0, r: 4.7, h: 60 });
+  const N = 34, P = i => { const a = i * 0.62; return [Math.cos(a) * 8.2, (i + 1) * 1.3, Math.sin(a) * 8.2]; };
+  for (let i = 0; i < N; i++) { const [x, y, z] = P(i), big = i % 8 === 7, tint = RAINBOW[i % 8];
+    if (big) { L.cyl(x, y, z, 2.9, { tint }); L.checks.push([x, y + 0.1, z, -999]); L.deco('drapeau', x * 1.26, y, z * 1.26, { tint, only: ['tissu'], rot: -i * 0.62 }); }
+    else if (i % 8 === 3) { const a = i * 0.62; L.cyl(x, y, z, 2.0, { tint, move: t => { const r = 8.2 + Math.sin(t * 1.3 + i) * 1.5; return [Math.cos(a) * r, y, Math.sin(a) * r]; } }); }
+    else if (i % 8 === 5) { const a = i * 0.62; L.cyl(x, y, z, 2.0, { tint, move: t => [x, y + Math.sin(t * 1.5 + i) * 0.7, z] }); }
+    else L.cyl(x, y, z, 2.0, { tint }); }
+  const top = P(N - 1)[1]; L.box(0, top + 0.9, 16, 12, 10, { tint: '#ffd21f' }); L.gate('ARRIVÉE', 0, top + 0.9, 13.4, { scale: 0.9, tint: '#ffd21f', only: ['orbe', 'bande'], c1: '#ffd21f', c2: '#ff8a1f' }); L.deco('podium', 0, top + 0.9, 18.5, { rot: Math.PI });
+  L.rail(-6, 21, 6, 21, top + 0.9); L.rail(-6, 14, -6, 21, top + 0.9); L.rail(6, 14, 6, 21, top + 0.9);
+  L.finishZ = 12.2; L.finishY = top + 0.4;
+  for (let i = 0; i < 16; i++) { const an = -0.9 - i * 0.16; L.spawns.push([Math.cos(an) * 10, 0.2, Math.sin(an) * 10, an > -99 ? Math.atan2(Math.cos(0) * 8.2 - Math.cos(an) * 10, -Math.sin(an) * 10) : 0]); }
+  backdrop(L, seed, { y: 16, r: 70, n: 20, fish: 22, fr: 16, balloons: 8 });
+}
+const COULEURS = [['ROUGE', '#ff3b5c'], ['JAUNE', '#ffd21f'], ['VERT', '#3fe26a'], ['BLEU', '#19a4ff']];
+function couleurs(L, seed, n, hooks) {
+  L.killY = -10; const R = rng(seed), G = 6, S = 3.5, tiles = [], bag = [];
+  for (let i = 0; i < G * G; i++) bag.push(i % 4); for (let i = bag.length - 1; i > 0; i--) { const j = Math.floor(R() * (i + 1)); [bag[i], bag[j]] = [bag[j], bag[i]]; }
+  for (let i = 0; i < G * G; i++) { const x = (i % G - (G - 1) / 2) * S, z = (Math.floor(i / G) - (G - 1) / 2) * S, c = L.box(x, 0, z, S - 0.12, S - 0.12, { tint: COULEURS[bag[i]][1], thick: 1.2 }); c.vis.traverse(m => { if (m.isMesh && m.material.name === 'verre') m.material = glassOf(COULEURS[bag[i]][1]); }); tiles.push({ c, col: bag[i], k: 0 }); }
+  // chaque tour : on annonce une couleur, puis toutes les autres dalles tombent
+  let seen = -1;
+  L.ticks.push((t, dt) => { const D = 5.6, nC = Math.floor(t / D), ph = t - nC * D, warn = Math.max(1.5, 3.3 - nC * 0.16), target = Math.floor(rng(seed + nC * 7919)() * 4), drop = t > 0.01 && ph > warn && ph < D - 0.7;
+    if (nC !== seen && t > 0.01) { seen = nC; hooks.say && hooks.say(COULEURS[target][0] + ' !', COULEURS[target][1], warn); }
+    for (const T of tiles) { const down = drop && T.col !== target; T.k += ((down ? 1 : 0) - T.k) * Math.min(1, dt * (down ? 9 : 5)); T.c.on = T.k < 0.35; T.c.vis.position.y = -T.k * T.k * 9; T.c.vis.visible = T.k < 0.97; if (!down && !drop && ph < warn && T.col !== target && ph > warn - 0.9) T.c.vis.position.y = Math.sin(t * 50) * 0.04; } });
+  for (let i = 0; i < 16; i++) L.spawns.push([(i % 4 - 1.5) * S * 1.02, 0.2, (Math.floor(i / 4) % 4 - 1.5) * S, 0]);
+  backdrop(L, seed, { y: -6, r: 62, n: 16, fish: 20, fr: 18 });
+}
+const glassCache = {}; function glassOf(col) { if (!glassCache[col]) { const m = new THREE.MeshPhysicalMaterial({ color: col, roughness: 0.12, clearcoat: 1, envMapIntensity: 0.9, emissive: col, emissiveIntensity: 0.25 }); m.name = 'verre'; glassCache[col] = m; } return glassCache[col]; }
 export const GAMES = {
   course: { nom: 'Course Arc-en-ciel', aide: 'Arrive au bout du parcours avant les autres.', type: 'course', duree: 150, build: course },
   dalles: { nom: 'Dalles de Verre', aide: 'Les dalles disparaissent sous tes pieds. Reste en haut le plus longtemps.', type: 'survie', duree: 150, build: dalles },
   tourniquet: { nom: 'Tourniquet', aide: 'Saute par-dessus les barres. Le dernier debout gagne.', type: 'survie', duree: 150, build: tourniquet },
+  flipper: { nom: 'Flipper Géant', aide: 'Les bumpers tournent de plus en plus vite. Ne te fais pas éjecter.', type: 'survie', duree: 120, build: flipper },
+  bulles: { nom: 'Chasse aux Bulles', aide: 'Ramasse le plus de bulles dorées en 45 secondes.', type: 'points', duree: 45, build: bulles },
+  tour: { nom: 'Tour des Nuages', aide: 'Grimpe tout en haut de la tour avant les autres.', type: 'course', duree: 180, build: tour },
+  couleurs: { nom: 'Couleur Magique', aide: 'Cours sur la couleur annoncée : toutes les autres dalles tombent.', type: 'survie', duree: 150, build: couleurs },
 };
 export function buildGame(id, seed, n, hooks) { const L = new Level(); L.name = id; GAMES[id].build(L, seed, n, hooks); return L; }

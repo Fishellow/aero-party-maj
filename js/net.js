@@ -1,5 +1,6 @@
 // Parties en ligne : un joueur héberge, les autres le rejoignent avec un code. Tout passe par l'hôte.
 // XPeer (lib/xpeer.js) ouvre la liaison directe entre joueurs, avec un chemin de secours.
+const GUEST_MAY = new Set(['hi', 'me', 's', 'tile', 'fin', 'out', 'orb']);
 export const Net = {
   peer: null, isHost: false, online: false, code: '', myId: 'h', conns: new Map(), hostConn: null, offset: 0, rtt: 1e9, handlers: {}, seq: 0, timer: null,
   now() { return performance.now() + this.offset; },
@@ -16,7 +17,7 @@ export const Net = {
       p.on('connection', c => {
         const id = 'p' + (++this.seq); c.on('open', () => { if (this.conns.size >= 15) { c.send({ t: 'full' }); return setTimeout(() => c.close(), 300); } this.conns.set(id, c); c.last = performance.now(); c.send({ t: 'you', id }); });
         const gone = () => { if (this.conns.get(id) === c) { this.conns.delete(id); this.emit({ t: '_left' }, id); try { c.close(); } catch (e) { } } };
-        c.on('data', m => { if (!m || !m.t) return; c.last = performance.now(); if (m.t === 'bye') return gone(); if (m.t === 'pg') return c.send({ t: 'pn', c: m.c, h: performance.now() }); if (this.conns.get(id) === c) this.emit(m, id); });
+        c.on('data', m => { if (!m || !m.t) return; c.last = performance.now(); if (m.t === 'bye') return gone(); if (m.t === 'pg') return c.send({ t: 'pn', c: m.c, h: performance.now() }); if (this.conns.get(id) === c && GUEST_MAY.has(m.t)) this.emit(m, id); });
         c.on('close', gone);
       });
     });
@@ -33,7 +34,7 @@ export const Net = {
           if (m.t === 'pn') { const n = performance.now(), rtt = n - m.c; if (rtt < this.rtt + 15) { this.rtt = Math.min(rtt, this.rtt); this.offset = m.h + rtt / 2 - n; } return; }
           if (m.t === 'you') { this.myId = m.id; this.online = true; if (!done) { done = true; ok(); } return; }
           if (m.t === 'full') return fail({ type: 'full' });
-          this.emit(m, 'h'); });
+          if (typeof m.t === 'string' && m.t[0] !== '_') this.emit(m, 'h'); });
         c.on('close', () => { if (!done) return fail({ type: 'peer-unavailable' }); if (this.hostConn === c) { this.online = false; this.emit({ t: '_closed' }, 'h'); } });
       });
     });

@@ -47,7 +47,8 @@ function drawList() {
 function addRemote(r) { const p = { id: r.id, name: r.name, skin: r.skin, score: r.score || 0, buddy: new Buddy(r.skin, r.name), tgt: null, flags: F.GROUND, speed: 0, vy: 0, lv: -1 }; p.buddy.g.visible = false; G.P.set(r.id, p); if (G.phase !== 'boot' && G.phase !== 'menu') { toast(`${r.name} a rejoint la partie`); sfx('join'); } return p; }
 function syncRoster(list) {
   const seen = new Set();
-  for (const r of list) { if (r.id === me.id) { me.score = r.score; continue; } seen.add(r.id); const p = G.P.get(r.id);
+  if (!Array.isArray(list)) return;
+  for (const r0 of list.slice(0, 16)) { const r = { id: String(r0.id).slice(0, 8), name: cleanName(r0.name), skin: skinOf(r0.skin).id, score: Math.round(+r0.score) || 0 }; if (r.id === me.id) { me.score = r.score; continue; } seen.add(r.id); const p = G.P.get(r.id);
     if (!p) addRemote(r); else { if (p.skin !== r.skin) p.buddy.setSkin(r.skin); if (p.name !== r.name) p.buddy.setName(r.name); p.name = r.name; p.skin = r.skin; p.score = r.score; } }
   for (const [id, p] of G.P) if (!seen.has(id)) { p.buddy.dispose(); G.P.delete(id); toast(`${p.name} est parti`); }
   crowns(); drawList();
@@ -67,10 +68,14 @@ Net.on('busy', () => { G.busy = true; drawList(); });
 Net.on('s', (m, id) => { if (Net.isHost && Array.isArray(m.d)) { G.states[id] = m.d; applyState(id, m.d); } });
 Net.on('S', m => { for (const id in m.d) if (id !== me.id) applyState(id, m.d[id]); });
 Net.on('start', m => onStart(m));
-Net.on('tile', (m, id) => { if (Net.isHost) Net.send({ t: 'tile', i: m.i }, id); if (G.level && G.game) G.level.killTile(m.i); });
-Net.on('fin', (m, id) => { if (Net.isHost) setRes(id, 'fin', +m.time || 0); });
-Net.on('out', (m, id) => { if (Net.isHost) setRes(id, 'out', +m.time || 0); });
-Net.on('res', m => { if (G.game) { G.game.res[m.id] = { [m.k]: m.time }; drawList(); const p = G.P.get(m.id); if (p && m.id !== me.id) toast(m.k === 'out' ? `${p.name} est éliminé` : `${p.name} est arrivé`); } });
+Net.on('tile', (m, id) => { const i = m.i | 0; if (!G.level || !G.game || G.phase !== 'play' || !G.level.tiles[i]) return; if (Net.isHost) Net.send({ t: 'tile', i }, id); G.level.killTile(i); });
+Net.on('orb', (m, id) => { if (Net.isHost) claimOrb(m.i | 0, id); });
+Net.on('orbx', m => gotOrb(m.i, m.id));
+const hostT = () => G.game ? (Net.now() - G.game.t0) / 1000 : -1;
+// arrivée annoncée par un invité : l'hôte attend (2 s au plus) que la position reçue le confirme
+Net.on('fin', (m, id) => { const g = G.game; if (!Net.isHost || !g || g.def.type !== 'course' || hostT() < 3 || g.res[id]) return; g.pend[id] = hostT(); });
+Net.on('out', (m, id) => { const g = G.game; if (!Net.isHost || !g || g.def.type !== 'survie' || hostT() < 0) return; setRes(id, 'out', hostT()); });
+Net.on('res', m => { if (G.game && (m.k === 'fin' || m.k === 'out')) { G.game.res[String(m.id)] = { [m.k]: +m.time || 0 }; drawList(); const p = G.P.get(m.id); if (p && m.id !== me.id) toast(m.k === 'out' ? `${p.name} est éliminé` : `${p.name} est arrivé`); } });
 Net.on('end', m => onEnd(m));
 Net.on('lobby', () => enterLobby());
 function applyState(id, d) { const p = G.P.get(id); if (!p) return; p.tgt = { x: d[0], y: d[1], z: d[2], yaw: d[3] }; p.flags = d[4]; p.speed = d[5]; p.vy = d[6]; if (p.lv !== d[7]) { p.lv = d[7]; p.snap = true; } }
@@ -78,7 +83,7 @@ function applyState(id, d) { const p = G.P.get(id); if (!p) return; p.tgt = { x:
 // ------------------------------------------------------------------ déroulé
 function setLevel(L) { if (G.level) G.level.dispose(); G.level = L; W.sunBlocked = (o, d) => L.blocked(o, d); G.fade = 1; }
 function placeMe(i) { const s = G.level.spawns[i % G.level.spawns.length]; G.ctl.place(s[0], s[1], s[2], s[3]); G.cam.yaw = s[3] + Math.PI; G.cam.pitch = 0.3; G.cam.dist = 7.5; G.cam.tgt.set(s[0], s[1] + 1.15, s[2]); G.spawnI = i; }
-function hideOverlays() { $('card').classList.remove('on'); $('results').classList.remove('on'); center(''); $('banner').classList.remove('on'); }
+function hideOverlays() { $('banner').style.color = ''; $('banner').style.webkitTextStroke = ''; $('card').classList.remove('on'); $('results').classList.remove('on'); center(''); $('banner').classList.remove('on'); }
 function enterLobby() {
   G.game = null; G.busy = false; G.lv = 0; if (!G.level || G.level.name !== 'lobby') setLevel(buildLobby()); else G.fade = 1; G.phase = 'lobby'; G.ctl.frozen = false; G.myFlags = 0;
   const ids = everyone().map(p => p.id).sort(); placeMe(Math.max(0, ids.indexOf(me.id)));
@@ -110,21 +115,26 @@ function hostStart(force) {
 }
 function onStart(m) {
   const def = GAMES[m.g]; if (!def) return; G.busy = false;
-  G.game = { id: m.g, def, t0: m.t0, order: m.order, res: {}, done: false, over: false, check: -1, cd: 4, endAt: 0 }; G.lv = m.lv; G.round = m.lv;
-  setLevel(buildGame(m.g, m.seed, m.order.length, { tile: i => { if (G.phase !== 'play') return; G.level.killTile(i); FX.spark(G.level.tiles[i].c, '#bff3ff', 6, 0.5); sfx('tile'); Net.send({ t: 'tile', i }); } }));
+  G.game = { id: m.g, def, t0: m.t0, order: m.order, res: {}, pts: {}, pend: {}, done: false, over: false, check: -1, cd: 4, endAt: 0 }; G.lv = m.lv; G.round = m.lv;
+  setLevel(buildGame(m.g, m.seed, m.order.length, { tile: i => { if (G.phase !== 'play') return; G.level.killTile(i); FX.spark(G.level.tiles[i].c, '#bff3ff', 6, 0.5); sfx('tile'); Net.send({ t: 'tile', i }); }, say: (txt, col, sec) => { const b = $('banner'); b.style.color = col; b.style.webkitTextStroke = '10px #fff'; b.style.paintOrder = 'stroke fill'; banner(txt, sec * 1000); sfx('tick'); } }));
+  G.level.onOrb = i => { if (G.phase !== 'play') { G.level.orbs[i].asked = false; return; } if (Net.isHost || !Net.online) claimOrb(i, me.id); else Net.send({ t: 'orb', i }); }; G.lastGY = 0;
   placeMe(Math.max(0, m.order.indexOf(me.id))); G.ctl.frozen = true; G.phase = 'intro'; G.myFlags = 0;
   screen('game'); ui('main'); hideOverlays(); $('cardnum').textContent = 'Manche ' + m.lv; $('cardname').textContent = def.nom; $('cardaide').textContent = def.aide; $('card').classList.add('on'); setTimeout(() => $('card').classList.remove('on'), 3300);
   $('gname').textContent = def.nom; $('gtime').textContent = ''; $('gtime').classList.remove('low'); drawList(); sfx('card');
 }
+function claimOrb(i, id) { const g = G.game, L = G.level; if (!g || g.over || g.def.type !== 'points' || !L.orbs[i] || L.orbs[i].taken || hostT() < L.orbs[i].at) return; if (id !== me.id) { const s = G.states[id]; if (!s || Math.hypot(s[0] - L.orbs[i].x, s[2] - L.orbs[i].z) > 4) return; } Net.send({ t: 'orbx', i, id }); gotOrb(i, id); }
+function gotOrb(i, id) { const g = G.game; if (!g || !G.level.takeOrb(i)) return; g.pts[id] = (g.pts[id] || 0) + 1; if (id === me.id) { sfx('check'); $('gname').textContent = g.def.nom + ' · ' + g.pts[id]; } }
 function setRes(id, k, time) { const g = G.game; if (!g || g.over || g.res[id]) return; g.res[id] = { [k]: time }; Net.send({ t: 'res', id, k, time }); drawList(); const p = G.P.get(id); if (p && id !== me.id) toast(k === 'out' ? `${p.name} est éliminé` : `${p.name} est arrivé`); }
 function report(k, time) { if (Net.isHost || !Net.online) setRes(me.id, k, time); else { G.game.res[me.id] = { [k]: time }; Net.send({ t: k, time }); drawList(); } }
 function hostCheckEnd(t) {
   const g = G.game; if (!g || g.over || (Net.online && !Net.isHost)) return;
+  for (const id in g.pend) { const st = G.states[id], L = G.level; if (st && st[7] === G.lv && st[2] >= L.finishZ - 3 && st[1] >= L.finishY - 2) { setRes(id, 'fin', g.pend[id]); delete g.pend[id]; } else if (t - g.pend[id] > 2) delete g.pend[id]; }
   const ids = g.order.filter(id => id === me.id || G.P.has(id)), n = ids.length; let end = t > g.def.duree;
-  if (g.def.type === 'course') { const fins = ids.filter(id => g.res[id]); if (fins.length === n) end = true; if (fins.length && !g.endAt) g.endAt = t + 30; if (g.endAt && t > g.endAt) end = true; }
+  if (g.def.type === 'points') { /* fin au chrono seulement */ }
+  else if (g.def.type === 'course') { const fins = ids.filter(id => g.res[id]); if (fins.length === n) end = true; if (fins.length && !g.endAt) g.endAt = t + 30; if (g.endAt && t > g.endAt) end = true; }
   else { const alive = ids.filter(id => !g.res[id]); if (n > 1 ? alive.length <= 1 : alive.length === 0) end = true; }
   if (!end) return; g.over = true;
-  const posZ = id => id === me.id ? G.ctl.pos.z : (G.states[id] ? G.states[id][2] : 0), val = id => { const r = g.res[id]; return g.def.type === 'course' ? (r ? 1e6 - r.fin : posZ(id)) : (r ? r.out : 1e6); };
+  const posZ = id => id === me.id ? G.ctl.pos.z : (G.states[id] ? G.states[id][2] : 0), posY = id => id === me.id ? G.ctl.pos.y : (G.states[id] ? G.states[id][1] : 0), val = id => { const r = g.res[id]; if (g.def.type === 'points') return g.pts[id] || 0; if (g.id === 'tour') return r ? 1e6 - r.fin : posY(id); return g.def.type === 'course' ? (r ? 1e6 - r.fin : posZ(id)) : (r ? r.out : 1e6); };
   const rank = ids.slice().sort((a, b) => val(b) - val(a)), pts = {}, scores = {};
   rank.forEach((id, i) => { pts[id] = (n - i) * 10 + (i === 0 ? 5 : 0); const p = id === me.id ? me : G.P.get(id); p.score += pts[id]; });
   for (const p of everyone()) scores[p.id] = p.score;
@@ -132,7 +142,8 @@ function hostCheckEnd(t) {
 }
 function onEnd(m) {
   const g = G.game, c0 = G.ctl; if (!g) return; g.over = true; G.phase = 'results'; c0.frozen = true; if (document.pointerLockElement) document.exitPointerLock();
-  for (const p of everyone()) if (m.scores[p.id] != null) p.score = m.scores[p.id];
+  if (!m || !Array.isArray(m.rank) || !m.scores || !m.pts) return;
+  for (const p of everyone()) if (m.scores[p.id] != null) p.score = Math.round(+m.scores[p.id]) || 0;
   const byId = id => id === me.id ? me : G.P.get(id), won = m.rank[0] === me.id;
   $('reslist').innerHTML = m.rank.map((id, i) => { const p = byId(id); return p ? `<li style="--i:${i}"><span class="rk">${i + 1}</span><i style="background:${grad(skinOf(p.skin))}"></i><span class="nm">${esc(p.name)}</span><span class="pt">+${+m.pts[id] || 0}</span><span class="tot">${p.score} pts</span></li>` : ''; }).join('');
   $('restitle').textContent = won ? 'Victoire !' : 'Résultats'; hideOverlays(); screen('game'); ui('main'); $('results').classList.add('on');
@@ -187,9 +198,11 @@ function playLogic(t, dt) {
   if (!g.done) {
     if (g.def.type === 'course') {
       L.checks.forEach((k, i) => { if (i > g.check && c.grounded && p.z >= k[3] && p.y > k[1] - 1) { g.check = i; sfx('check'); toast('Point de passage'); FX.ring(p, '#ffe45a', 9); FX.spark(p, '#ffe45a', 18); } });
-      if (p.y < L.killY) { const k = g.check >= 0 ? L.checks[g.check] : L.spawns[G.spawnI]; c.place(k[0] + (Math.random() - 0.5) * 3, k[1] + 0.5, k[2], 0); G.fade = 0.6; }
+      if (c.grounded) G.lastGY = p.y;
+      if (p.y < L.killY || (L.fall && p.y < G.lastGY - L.fall)) { G.lastGY = -99; const k = g.check >= 0 ? L.checks[g.check] : L.spawns[G.spawnI]; c.place(k[0] + (Math.random() - 0.5) * 3, k[1] + 0.5, k[2], 0); G.fade = 0.6; }
       if (p.z > L.finishZ && p.y > L.finishY && c.grounded) { g.done = true; report('fin', t); const pos = Object.keys(g.res).length; banner(pos <= 1 ? 'Premier !' : `Arrivé ${pos}e`, 4000); G.myFlags = F.WIN; sfx('win'); FX.confetti(p, 140); }
-    } else if (p.y < L.killY) { g.done = true; report('out', t); G.myFlags = F.OUT; c.frozen = true; banner('Éliminé', 3500); sfx('out'); }
+    } else if (g.def.type === 'points') { if (p.y < L.killY) { placeMe(G.spawnI); G.fade = 0.6; } }
+    else if (p.y < L.killY) { g.done = true; report('out', t); G.myFlags = F.OUT; c.frozen = true; banner('Éliminé', 3500); sfx('out'); }
   }
   hostCheckEnd(t);
 }
